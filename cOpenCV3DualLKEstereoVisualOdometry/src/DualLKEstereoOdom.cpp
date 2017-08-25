@@ -33,30 +33,14 @@ THE SOFTWARE.
 using namespace std;
 using namespace cv;
 
-vector<string> getLinesFromFile(string fileName){
-	vector<string> lines;
-	ifstream myfile(fileName.c_str());
-	string str;
-	while (getline(myfile,str))
-		lines.push_back(str);
-	return lines;
-}
-vector<string> split(string line){
-	string str;
-	istringstream ss(line);
-	vector<string> words;
-	while(ss>> str)
-		words.push_back(str);
-	return words;
-}
 vector<Mat> getKittiPoses(string fileName){
 	vector<Mat> vm;
 	vector<string> lines=getLinesFromFile(fileName);
-	for(int i=0;i<lines.size();i++){
+	for(unsigned int i=0;i<lines.size();i++){
 		string line=lines[i];
 		vector<string> words=split(line);
 		double d[12];
-		for(int i=0;i<words.size();i++){
+		for(unsigned int i=0;i<words.size();i++){
 			d[i]=atof(words[i].c_str());
 		}
 		Mat m = (Mat_<double>(3, 4) << d[0],d[1],d[2],d[3],
@@ -66,42 +50,13 @@ vector<Mat> getKittiPoses(string fileName){
 	}
 	return vm;
 }
-string to_string(int i){
-	string result;          // string which will contain the result
-	ostringstream convert;   // stream used for the conversion
-	convert << i;      // insert the textual representation of 'Number' in the characters in the stream
-	result = convert.str();
-	return result;
-}
 string get_sequence(int n) {
 	if (n==0) return "000000";
-	else if (n/10 == 0) return "00000"+to_string(n);
-	else if (n/100 == 0) return "0000"+to_string(n);
-	else if (n/1000 == 0) return "000"+to_string(n);
-	else if (n/10000 == 0) return "00"+to_string(n);
+	else if (n/10 == 0) return "00000"+toString(n);
+	else if (n/100 == 0) return "0000"+toString(n);
+	else if (n/1000 == 0) return "000"+toString(n);
+	else if (n/10000 == 0) return "00"+toString(n);
 	return NULL;
-}
-Mat stackH(Mat im1,Mat im2){
-    Size sz1 = im1.size();
-    Size sz2 = im2.size();
-    Mat im3(sz1.height, sz1.width+sz2.width, CV_8UC3);
-    Mat left(im3, Rect(0, 0, sz1.width, sz1.height));
-    im1.copyTo(left);
-    Mat right(im3, Rect(sz1.width, 0, sz2.width, sz2.height));
-    im2.copyTo(right);
-    //imshow("im3", im3);
-    return im3;
-}
-Mat stackV(Mat im1,Mat im2){
-    Size sz1 = im1.size();
-    Size sz2 = im2.size();
-    Mat im3(sz1.height+sz2.height, sz1.width, CV_8UC3);
-    Mat top(im3, Rect(0, 0, sz1.width, sz1.height));
-    im1.copyTo(top);
-    Mat down(im3, Rect(0, sz1.height, sz2.width, sz2.height));
-    im2.copyTo(down);
-    //imshow("im3", im3);
-    return im3;
 }
 int main(int argc, char** argv) {
 
@@ -125,83 +80,14 @@ int main(int argc, char** argv) {
 	cur_frame_c3= imread(path+"/image_3/000000.png");
 	vector<Mat> vm=getKittiPoses(path+"/../poses/00.txt");
 	DualLKEstereoVisualOdometry dsvo2(cur_frame_c2,cur_frame_c3);
-	/* some function tests
-	vector<Point3f> prev3Dpts;
-	vector<Point2f> cur2DforPnP;
-	prev3Dpts.push_back(Point3f( 1, 0, 10));
-	prev3Dpts.push_back(Point3f( 1, 0, 20));
-	prev3Dpts.push_back(Point3f(-1, 0, 20));
-	prev3Dpts.push_back(Point3f(-1, 0, 10));
-	prev3Dpts.push_back(Point3f( 0, 0, 10));
-	prev3Dpts.push_back(Point3f(-1, 0, 10));
-	prev3Dpts.push_back(Point3f(-1,-1, 10));
-	prev3Dpts.push_back(Point3f( 1,-1, 10));
-	prev3Dpts.push_back(Point3f( 1, 0, 10));
-	prev3Dpts.push_back(Point3f( 1,-1, 10));
-	prev3Dpts.push_back(Point3f( 1, 1, 10));
-	prev3Dpts.push_back(Point3f( 0, 0, 15));
-	prev3Dpts.push_back(Point3f(-1, 0, 15));
-	prev3Dpts.push_back(Point3f(-1,-1, 15));
-	prev3Dpts.push_back(Point3f( 1,-1, 15));
-	prev3Dpts.push_back(Point3f( 1, 0, 15));
-	prev3Dpts.push_back(Point3f( 1,-1, 15));
-	prev3Dpts.push_back(Point3f( 1, 1, 15));
-	Mat rvec,tll,inliers;
-	tll = (Mat_<double>(3, 1) << 0., 1., 0.);
-	rvec = (Mat_<double>(3, 1) << PI/16.0, 0*PI/8.0, 0.);
-	cout << "rvec" << rvec << endl;
-	cout << "tll=" << tll << endl;
-	Mat K=dsvo2.K;
-	cv::projectPoints(prev3Dpts,rvec,tll,K,Mat(),cur2DforPnP);
-	//Transformation estimation 3D-3D
-	vector<Point3f> cur3Dpts;
-	Mat R,t;
-	Rodrigues(rvec,R);
-	Mat T=(Mat_<double>(3, 4) << R.at<double>(0,0), R.at<double>(0,1), R.at<double>(0,2), tll.at<double>(0,0),
-			                     R.at<double>(1,0), R.at<double>(1,1), R.at<double>(1,2), tll.at<double>(1,0),
-								 R.at<double>(2,0), R.at<double>(2,1), R.at<double>(2,2), tll.at<double>(2,0));
-	cout << "R"<< R <<endl;
-	cout << "t"<< t <<endl;
-	cv::transform(prev3Dpts,cur3Dpts,T);
-	Mat  cur3DMat=Mat( cur3Dpts).reshape(1);
-	Mat prev3DMat=Mat(prev3Dpts).reshape(1);
-	//cout << "centerR(prev3Dpts)"<<centerR(prev3DMat)<<endl;
-	//cout << "centerR(prev3Dpts)"<<prev3DMat<<endl;
-	rigidTransformation(prev3DMat,cur3DMat,R,t);
-	cout << "R"<< R <<endl;
-	cout << "t"<< t <<endl;
 
-
-	Mat pimg(380,1200, CV_8UC3, Scalar(255,255,255));
-	line(pimg,cur2DforPnP[0],cur2DforPnP[1],Scalar(255,0,0));
-	line(pimg,cur2DforPnP[1],cur2DforPnP[2],Scalar(255,0,0));
-	line(pimg,cur2DforPnP[2],cur2DforPnP[3],Scalar(255,0,0));
-	line(pimg,cur2DforPnP[3],cur2DforPnP[0],Scalar(255,0,0));
-	for(unsigned int i=4;i<cur2DforPnP.size();i++){
-		if(i>11)
-			circle(pimg,cur2DforPnP[i],2,Scalar(0,0,255));
-		else
-			circle(pimg,cur2DforPnP[i],2,Scalar(0,255,0));
-	}
-	imshow("pimg",pimg);
-	//Transformation estimation 3D-2D
-	solvePnPRansac(prev3Dpts, cur2DforPnP, K, Mat(), rvec, tll,false,500,2,0.99,inliers, SOLVEPNP_ITERATIVE );//SOLVEPNP_EPNP
-
-	Rodrigues(rvec,R);
-	t=-R.t()*tll;
-	cout << "rvec" << rvec << endl;
-	cout << "tll=" << tll << endl;
-	cout << "t=" << t << endl;
-	cout << inliers.size() << endl;
-	waitKey(0);
-    */
 	float l=0;//trajectory length
 	for (int i=1; i<=SEQ_MAX; i+=1) {
 		t2_= (Mat_<double>(3, 1) << vm[i].at<double>(0,3),
 				                    vm[i].at<double>(1,3),
 									vm[i].at<double>(2,3));
 		l+=abs(t2_.at<double>(2,0));
-		cout << "gpos:" << t2_.t() <<":"<<l<< endl;
+		//cout << "gpos:" << t2_.t() <<":"<<l<< endl;
     	circle(top_view2, Point(200+t2_.at<double>(0, 2)/2.0, (200+t2_.at<double>(0, 0)/2.0)), 3, Scalar(0, 255, 255), -1);
 		circle(top_view2, Point(200+t2_.at<double>(0, 2)/2.0, (200+t2_.at<double>(0, 0)/2.0)), 2, Scalar(0,   0, 255), -1);
 	}

@@ -17,131 +17,14 @@
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/calib3d/calib3d.hpp"
 #include "rigid_transformation.h"
+#include "binned_detector.h"
+#include "opencv3_util.h"
 
 using namespace std;
 using namespace cv;
 
-string type2str(int type) {
- string r;
-
- uchar depth = type & CV_MAT_DEPTH_MASK;
- uchar chans = 1 + (type >> CV_CN_SHIFT);
-
- switch ( depth ) {
-   case CV_8U:  r = "8U"; break;
-   case CV_8S:  r = "8S"; break;
-   case CV_16U: r = "16U"; break;
-   case CV_16S: r = "16S"; break;
-   case CV_32S: r = "32S"; break;
-   case CV_32F: r = "32F"; break;
-   case CV_64F: r = "64F"; break;
-   default:     r = "User"; break;
- }
-
- r += "C";
- r += (chans+'0');
-
- return r;
-}
-/*
-Mat centroidR(Mat &m){
-	Mat t=m.row(0);
-	int n=m.rows;
-	for(int i=1;i<n;i++){
-		t+=m.row(i);
-	}
-	t/=n;
-	return t;
-}
-Mat centroidC(Mat &m){
-	Mat t=m.col(0);
-	int n=m.cols;
-	for(int i=1;i<n;i++){
-		t+=m.col(i);
-	}
-	t/=n;
-	return t;
-}
-Mat centerR(Mat &M){
-	Mat Ret;
-	M.copyTo(Ret);
-	Mat centroidM(centroidR(M));
-	int n=M.rows;
-	for(int i=0;i<n;i++){
-		Ret.row(i)-=centroidM;
-	}
-	return Ret;
-}
-Mat centerC(Mat &M){
-	Mat Ret;
-	M.copyTo(Ret);
-	Mat centroidM(centroidC(M));
-	int n=M.cols;
-	for(int i=0;i<n;i++){
-		Ret.col(i)-=centroidM;
-	}
-	return Ret;
-}
-
-void rigidTransformation(Mat &A,Mat &B,Mat &R,Mat &t){
-	/*http://nghiaho.com/?page_id=671
-	Mat centroidA,centroidB;
-	centroidA=centroidR(A);
-	//cout << "centroidA" << endl;
-	centroidB=centroidR(B);
-	//cout << "centroidB" << endl;
-	Mat AA=centerR(A);
-	//cout << "AA" << endl;
-	//cout << A.rows<<A.cols<<A.channels() << "AA"<<A<<endl;
-	Mat BB=centerR(B);
-	//cout << "BB" << endl;
-	Mat H=AA.t()*BB;
-	//cout << "H" << endl;
-	Mat w, u, vt;
-	SVD::compute(H, w, u, vt);
-	//cout << "SVD::compute" << endl;
-	R=vt.t()*u.t();
-	//cout << "R" << endl;
-	if(cv::determinant(R)<0.0){
-		//cout << "if(cv::determinant" << endl;
-		vt.row(2)*=-1;
-		R=vt.t()*u.t();
-	}
-	t=-R*centroidA.t()+centroidB.t();
-}
-*/
 class DualLKEstereoVisualOdometry {
 public :
-	string to_string(float i){
-		string result;          // string which will contain the result
-		ostringstream convert;   // stream used for the conversion
-		convert.precision(2);
-		convert << i;      // insert the textual representation of 'Number' in the characters in the stream
-		result = convert.str();
-		return result;
-	}
-	Mat stackH(Mat im1,Mat im2){
-	    Size sz1 = im1.size();
-	    Size sz2 = im2.size();
-	    Mat im3(sz1.height, sz1.width+sz2.width, CV_8UC3);
-	    Mat left(im3, Rect(0, 0, sz1.width, sz1.height));
-	    im1.copyTo(left);
-	    Mat right(im3, Rect(sz1.width, 0, sz2.width, sz2.height));
-	    im2.copyTo(right);
-	    //imshow("im3", im3);
-	    return im3;
-	}
-	Mat stackV(Mat im1,Mat im2){
-	    Size sz1 = im1.size();
-	    Size sz2 = im2.size();
-	    Mat im3(sz1.height+sz2.height, sz1.width, CV_8UC3);
-	    Mat top(im3, Rect(0, 0, sz1.width, sz1.height));
-	    im1.copyTo(top);
-	    Mat down(im3, Rect(0, sz1.height, sz2.width, sz2.height));
-	    im2.copyTo(down);
-	    //imshow("im3", im3);
-	    return im3;
-	}
 	Mat curFrameL,curFrameL_c, prevFrameL,prevFrameL_c, curFrameL_kp, prevFrameL_kp;
 	Mat curFrameR,curFrameR_c, prevFrameR,prevFrameR_c, curFrameR_kp, prevFrameR_kp;
 	vector<KeyPoint> curKeypointsL, prevKeypointsL, curGoodKeypointsL, prevGoodKeypointsL;
@@ -150,9 +33,12 @@ public :
 	Mat curDescriptorsR, prevDescriptorsR;
 	vector<Point2f> curPointsL,prevPointsL;
 	vector<Point2f> curPointsR,prevPointsR;
+    vector<Point2f> cur2Dpts,prev2Dpts;//temporal variables
 	vector<DMatch> goodMatchesL;
 	vector<DMatch> goodMatchesR;
 
+	//BinnedDetector bd;
+	BinnedGoodFeaturesToTrack bd;
 	Mat descriptors_1, descriptors_2,  img_matches;
 	Ptr<FeatureDetector> detector;
 	Ptr<DescriptorExtractor> extractor;
@@ -189,8 +75,12 @@ public :
 	//Historic data
 	vector< vector<Point2f> > pts2D;
 	vector< vector<Point3f> > pts3D;
+
+	//Visualization objects
+	Mat cpImg;
 //public:
-	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c){
+	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c):bd(3,10){
+		cout << pcurFrameL_c.rows << ","<<pcurFrameL_c.cols<<endl;
 		pcurFrameL_c.copyTo(curFrameL_c);
 		pcurFrameR_c.copyTo(curFrameR_c);
 		cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);
@@ -205,12 +95,12 @@ public :
 		matcher = makePtr<FlannBasedMatcher>(indexParams, searchParams);
 
 		//detector->detect(curFrameL, curKeypointsL);
-		binnedDetection(curFrameL, curKeypointsL);
+		bd.binnedDetection(curFrameL, curKeypointsL);
 		curPointsL.clear();
 		KeyPoint::convert(curKeypointsL, curPointsL);
         //cornerSubPix(curFrameL, curPointsL, subPixWinSize, Size(-1,-1), termcrit);
 		//detector->detect(curFrameR, curKeypointsR);
-		binnedDetection(curFrameR, curKeypointsR);
+		bd.binnedDetection(curFrameR, curKeypointsR);
 		extractor->compute(curFrameL, curKeypointsL, curDescriptorsL);
 		extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
 		//Global transformations
@@ -309,100 +199,14 @@ public :
 		}
 		uvd= Mat(vp);
 	}
-	void binDetect(Mat &img,int i,int j,vector<KeyPoint> &dkpt){
-		int bwc=10;//bin with col
-		int bhr=5;//bin height row
-		int brows=img.rows/bhr;
-		int bcols=img.cols/bwc;
-		Rect r(j, i, bcols, brows);
-		Mat imgBin(img, r);
-		detector->detect(imgBin, dkpt);
-		//relocate
-		for(unsigned int k=0;k<dkpt.size();k++){
-			dkpt[k].pt+=Point2f(j,i);
-		}
-	}
-	void binnedDetection(Mat &img,vector<KeyPoint> &kpts){
-		int bwc=10;//bin with col
-		int bhr=5;//bin height row
-		int brows=img.rows/bhr;
-		int bcols=img.cols/bwc;
-		kpts.clear();
-		vector<KeyPoint> dkpt;
-		Mat ims;
-		for(int i=0;i<img.rows-brows;i+=brows/2)
-			for(int j=0;j<img.cols-bcols;j+=bcols/2){
-				binDetect(img,i,j,dkpt);
-				/*
-				Rect r(j, i, bcols, brows);
-				Mat imgBin(img, r);
-				detector->detect(imgBin, dkpt);
-				//relocate
-				for(unsigned int k=0;k<dkpt.size();k++){
-					dkpt[k].pt+=Point2f(j,i);
-				}
-				*/
-				//cv::drawKeypoints(img,dkpt,ims, Scalar(0,0,255));
-				//imshow("imgBin",imgBin);
-				//imshow("dkpt",ims);
-				//waitKey(0);
-				//cout << "#dkpt="<<dkpt.size()<<endl;
-			    kpts.insert(kpts.end(), dkpt.begin(), dkpt.end());//append dkpt to kpts
-				/*int n=5;
-				if(dkpt.size()>5){
-					for(int i=0;i<n;i++){
-					kpts.push_back(dkpt.back());
-					dkpt.pop_back();
-					}
-				}
-				else{
-				    kpts.insert(kpts.end(), dkpt.begin(), dkpt.end());//append dkpt to kpts
-				}*/
-			}
-		//cv::drawKeypoints(img,kpts,ims, Scalar(0,0,255));
-		//imshow("kpts",ims);
-		//waitKey(0);
-	}
 	bool is2DpointInFrame(Point2f& p){
 		return p.x>=0 && p.x<curFrameL.cols-1 && p.y>=0 && p.y<curFrameL.rows-1;
 	}
-	void stepStereoOdometry(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
-		// prev<=cur
-		curDisp.copyTo(prevDisp);
-		curPointCloud.copyTo(prevPointCloud);
-		curFrameL.copyTo(prevFrameL);		      curFrameR.copyTo(prevFrameR);
-		curFrameL_c.copyTo(prevFrameL_c);	      curFrameR_c.copyTo(prevFrameR_c);
-		prevKeypointsL = curKeypointsL;		      prevKeypointsR = curKeypointsR;
-		curDescriptorsL.copyTo(prevDescriptorsL); curDescriptorsR.copyTo(prevDescriptorsR);
-		prevPointsL = curPointsL;    		      prevPointsR = curPointsR;
-        // New values of current frame
-		pcurFrameL_c.copyTo(curFrameL_c);	      pcurFrameR_c.copyTo(curFrameR_c);
-		cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);		cvtColor(curFrameR_c, curFrameR, CV_BGR2GRAY);
-
-		//Compute disparity and 3D point cloud
-		sm->compute(curFrameL, curFrameR, curDisp);
-        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
-
-		//Mix disparity and previous left frame
-        //dispC8 if to be visualized
-        Mat disp8;
-		Mat dispC8;
-        prevDisp.convertTo(disp8, CV_8U);
-		cvtColor(disp8,dispC8,CV_GRAY2BGR);
-		addWeighted(dispC8,0.2,prevFrameL_c,0.8,0.0,dispC8);
-		//Mix disparity and current left frame
-        Mat cdisp8;
-		Mat cdispC8;
-		curDisp.convertTo(cdisp8,CV_8U);
-		cvtColor(cdisp8,cdispC8,CV_GRAY2BGR);
-		addWeighted(cdispC8,0.2,curFrameL_c,0.8,0.0,cdispC8);
-		//Stack previous and current frame in a image to visualize
-		Mat cpImg=stackV(cdispC8,dispC8);
-
+	void opticalFlowPyrLKTrack(){
 	    //Lucas-Kanade parameters
 	    TermCriteria termcrit(TermCriteria::COUNT|TermCriteria::EPS,20,0.03);
 	    //Size subPixWinSize(10,10), winSize(31,31);
-	    Size subPixWinSize(10,10), winSize(20,20);
+	    Size subPixWinSize(10,10), winSize(21,21);
         vector<uchar> status;
         vector<float> err;
         vector<Point2f> tmpPrevPointsL,trackedPointsL;
@@ -420,42 +224,17 @@ public :
 				}
 			}
 		}
-		cout << "#prevPoints" << prevPointsL.size()<<endl;
-		cout << "#curPointsL" <<  curPointsL.size()<<endl;
-		if(curPointsL.size()<250){//match point if there are few points
-	        //Keypoints detection
-			binnedDetection( curFrameL,  curKeypointsL);
-			binnedDetection(prevFrameL, prevKeypointsL);
-			//detector->detect(curFrameR, curKeypointsR);
-			extractor->compute( curFrameL,  curKeypointsL,  curDescriptorsL);
-			extractor->compute(prevFrameL, prevKeypointsL, prevDescriptorsL);
-			//extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
-			//prev to cur left matches
-			findGoodMatches(prevKeypointsL,prevDescriptorsL,
-					        curKeypointsL, curDescriptorsL,
-							goodMatchesL,
-							prevGoodKeypointsL,curGoodKeypointsL);
-			cout << "#prevKeypointsL="<<prevKeypointsL.size()<<endl;
-			cout << "#curKeypointsL="<<curKeypointsL.size()<<endl;
-			cout << "#prevGoodKeypointsL="<<prevGoodKeypointsL.size()<<endl;
-			cout << "#curGoodKeypointsL="<<curGoodKeypointsL.size()<<endl;
-
-			curPointsL.clear();
-			KeyPoint::convert(curGoodKeypointsL, curPointsL);
-			prevPointsL.clear();
-			KeyPoint::convert(prevGoodKeypointsL, prevPointsL);
-			cout << "***** Tracking ******"<<endl;
-			cout << "#prevPoints" << prevPointsL.size()<<endl;
-			cout << "#curPointsL" <<  curPointsL.size()<<endl;
-		}
 		//Photometry subpixel improvement
         //cornerSubPix(prevFrameL, prevPointsL, subPixWinSize, Size(-1,-1), termcrit);
         //cornerSubPix( curFrameL,  curPointsL, subPixWinSize, Size(-1,-1), termcrit);
+	}
 
+	void selectGoodPoints(){
 		int cbad=0,nbad=0,dbad=0;
         prev3Dpts.clear();
         cur3Dpts.clear();
-        vector<Point2f> cur2Dpts,prev2Dpts;
+        prev2Dpts.clear();
+        cur2Dpts.clear();
         Point3f p3d,c3d;
         for(unsigned int i=0;i<prevPointsL.size();i++){
     		Point2f p2df1=prevPointsL[i];
@@ -473,20 +252,20 @@ public :
         	float pz=p3d.z;
         	float cz=c3d.z;
         	//not disparity points have a z value of 1000
-        	if(pz!=10000 && cz!=10000){
+        	if(pz<10000 && cz<10000){
 				Point3f dif3D=p3d-c3d;
 				float d=sqrt(dif3D.dot(dif3D));
 				//d should be velocity/time
 				if (d<50e3/36000){
-					cout << "dif3D="<<dif3D<<":"<<d<<endl;
+					//cout << "dif3D="<<dif3D<<":"<<d<<endl;
 					int disp=prevDisp.at<unsigned short>(p2df1)>>4;//16-bit fixed-point disparity map (where each disparity value has 4 fractional bits)
 					Point2f p2f2=prevPointsL[i];
 					p2f2.x+=disp;
 					p2f2.y+=cpImg.rows/2;
 					line(cpImg,ppx,p2f2,Scalar(0, 255, 0));
 					if(pz<40.5 && pz>0.0){
-						putText(cpImg,to_string(pz)+":"+to_string(d),ppx,1,1,Scalar(0, 255, 255));
-						putText(cpImg,to_string(cz),c2df1,1,1,Scalar(255, 255, 0));
+						putText(cpImg,toString(pz)+":"+toString(d),ppx,1,1,Scalar(0, 255, 255));
+						putText(cpImg,toString(cz),c2df1,1,1,Scalar(255, 255, 0));
 						prev3Dpts.push_back(p3d);
 						 cur3Dpts.push_back(c3d);
 						prev2Dpts.push_back(p2df1);
@@ -496,7 +275,7 @@ public :
 						line(cpImg,ppx,c2df1,Scalar(255,255,255));
 					}
 					else{
-						putText(cpImg,to_string(cz),c2df1,1,1,Scalar(0, 64, 255));
+						putText(cpImg,toString(cz),c2df1,1,1,Scalar(0, 64, 255));
 						//circle(cpImg,ppx,3,Scalar(0, 128, 255));
 						line(cpImg,ppx,c2df1,Scalar(0, 128, 255));
 						nbad++;
@@ -520,16 +299,9 @@ public :
         cout <<"#PointsL left  ="<<prevPointsL.size()-cbad-nbad-dbad<<endl;
         cout <<"prev3Dpts="<< prev3Dpts.size() << endl;
         cout <<"cur2DforPnP="<< cur2Dpts.size() << endl;
-
-		Mat rvec;//rotation vector
-		vector<int> inliers;
+	}
+	void projectionError(Mat &rvec,Mat &tl){
 		vector<Point2f> proj2DafterPnP;
-		vector<Point3f> prevAfterFitting;
-    	Mat  cur3DMat=Mat( cur3Dpts).reshape(1);
-    	Mat prev3DMat=Mat(prev3Dpts).reshape(1);
-        rigidTransformation(cur3DMat,prev3DMat,Rll,tll);
-        Rodrigues(Rll,rvec);
-
 		cv::projectPoints(cur3Dpts,rvec,tll,K,Mat(),proj2DafterPnP);
 		//cv::transform(cur3Dpts,prevAfterFitting,Rll);
 		float tdp=0;
@@ -553,6 +325,12 @@ public :
         		prev2DptsClean.push_back(prev2Dpts[i]);
         	}
 		}
+
+ 		cur3Dpts= cur3DptsClean;
+ 		prev3Dpts= prev3DptsClean;
+ 		curPointsL=cur2DptsClean;
+ 		prevPointsL=prev2DptsClean;
+
 		for(size_t i=0;i<proj2DafterPnP.size();i++){
     		Point2f p2daf1=proj2DafterPnP[i];
     		Point2f p2df1=prev2Dpts[i];
@@ -588,6 +366,76 @@ public :
 			tdp/=proj2DafterPnP.size();
 			cout << "tdp1="<< tdp << endl;
 		}
+
+	}
+	void stepStereoOdometry(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
+		// prev<=cur
+		curDisp.copyTo(prevDisp);
+		curPointCloud.copyTo(prevPointCloud);
+		curFrameL.copyTo(prevFrameL);		      curFrameR.copyTo(prevFrameR);
+		curFrameL_c.copyTo(prevFrameL_c);	      curFrameR_c.copyTo(prevFrameR_c);
+		prevKeypointsL = curKeypointsL;		      prevKeypointsR = curKeypointsR;
+		curDescriptorsL.copyTo(prevDescriptorsL); curDescriptorsR.copyTo(prevDescriptorsR);
+		prevPointsL = curPointsL;    		      prevPointsR = curPointsR;
+        // New values of current frame
+		pcurFrameL_c.copyTo(curFrameL_c);	      pcurFrameR_c.copyTo(curFrameR_c);
+		cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);		cvtColor(curFrameR_c, curFrameR, CV_BGR2GRAY);
+
+		//Compute disparity and 3D point cloud
+		sm->compute(curFrameL, curFrameR, curDisp);
+        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+
+		//Mix disparity and previous left frame
+        //dispC8 if to be visualized
+        Mat disp8;
+		Mat dispC8;
+        prevDisp.convertTo(disp8, CV_8U);
+		cvtColor(disp8,dispC8,CV_GRAY2BGR);
+		addWeighted(dispC8,0.2,prevFrameL_c,0.8,0.0,dispC8);
+		//Mix disparity and current left frame
+        Mat cdisp8;
+		Mat cdispC8;
+		curDisp.convertTo(cdisp8,CV_8U);
+		cvtColor(cdisp8,cdispC8,CV_GRAY2BGR);
+		addWeighted(cdispC8,0.2,curFrameL_c,0.8,0.0,cdispC8);
+		//Stack previous and current frame in a image to visualize
+		cpImg=stackV(cdispC8,dispC8);
+
+		opticalFlowPyrLKTrack();
+
+		selectGoodPoints();
+
+		Mat rvec;//rotation vector
+		vector<Point3f> prevAfterFitting;
+    	//Mat  cur3DMat=Mat( cur3Dpts).reshape(1);
+    	//Mat prev3DMat=Mat(prev3Dpts).reshape(1);
+        //rigidTransformation(cur3DMat,prev3DMat,Rll,tll);
+        //Rodrigues(Rll,rvec);
+
+        Mat r,t,rr,tr,rri,tri;
+        //cv::solvePnP(cur3Dpts,prev2Dpts,K,noArray(),r,t,0,SOLVEPNP_ITERATIVE);
+
+        Mat inliers;
+        cv::solvePnPRansac(cur3Dpts,prev2Dpts,K,noArray(),rr,tr,false,1000,1.0,0.99,inliers);
+        vector<Point3f> prev3DptsIn,cur3DptsIn;
+        vector<Point2f> prev2DptsIn, cur2DptsIn;
+        for(int i=0;i<inliers.rows;i++){
+        	int idx=inliers.at<int>(i,0);
+        	 cur3DptsIn.push_back( cur3Dpts[idx]);
+        	prev3DptsIn.push_back(prev3Dpts[idx]);
+        	prev2DptsIn.push_back(prev2Dpts[idx]);
+        	 cur2DptsIn.push_back( cur2Dpts[idx]);
+        }
+        rri=rr;
+        tri=tr;
+        cv::solvePnPRansac(cur3DptsIn,prev2DptsIn,K,noArray(),rri,tri,true,1000,0.5,0.99,inliers);
+        rvec=rri; tll=tri;
+        cv::Rodrigues(rvec,Rll);
+
+        // curPointsL=cur2DptsIn;
+        //prevPointsL=prev2DptsIn;
+        projectionError(rvec,tll);
+
         //cv::transform(cur3DMat,prev3DMatAfter,cur3DMat);
 		//erase x and z rotations since car only rotate on y
         //rvec.at<float>(0.0)=0;
@@ -613,7 +461,21 @@ public :
 		Rgl = Rll*Rgl;
 		//cout << "tgl"<< tgl << endl;
 		//cout << "Rgl"<< Rgl << endl;
-  		resize(cpImg, cpImg, Size(), 0.70,0.70);
+
+        //refresh traking points
+		cout << "#curPoints" <<  curPointsL.size()<<endl;
+		if(curPointsL.size()<1950){//match point if there are few points
+	        //Keypoints detection
+			curKeypointsL.clear();
+			bd.refreshDetection(curFrameL, curPointsL, curKeypointsL);
+			vector<Point2f> rPoints;
+			KeyPoint::convert(curKeypointsL, rPoints);
+		    curPointsL.insert(curPointsL.end(), rPoints.begin(), rPoints.end());
+		}
+		cout << "#curPoints" <<  curPointsL.size()<<endl;
+
+		//Visualization
+  		resize(cpImg, cpImg, Size(), 0.970,0.970);
         imshow("prevDisp",cpImg);
 	}
 };
