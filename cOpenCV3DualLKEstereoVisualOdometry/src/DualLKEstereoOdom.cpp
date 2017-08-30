@@ -102,11 +102,13 @@ int main(int argc, char** argv) {
 		t2_=dsvo2.tgl;
 		cout << "gpos:" << t2_.t() << endl;
 		l+=abs(dsvo2.tll.at<float>(2,0));
-		cout << "lpos:" << dsvo2.tll.t() <<":"<<l<< endl;
+		cout << " i================="<<i<<"lpos:" << dsvo2.tll.t() <<":"<<l<< endl;
 		circle(top_view2, Point(200+t2_.at<double>(0, 2)/2.0, (200+t2_.at<double>(0, 0)/2.0)), 3, Scalar(0, 255, 0), -1);
 		circle(top_view2, Point(200+t2_.at<double>(0, 2)/2.0, (200+t2_.at<double>(0, 0)/2.0)), 2, Scalar(0, 0, 255), -1);
   		imshow("Top view2", top_view2);
- 		if (waitKey(0) == 27) break;
+  		if(i%25==0)
+  			dsvo2.showCloud(get_sequence(i),dsvo2.Rgl,dsvo2.tgl);
+ 		if (waitKey(1) == 27) break;
 	}
 	return 0;
 }

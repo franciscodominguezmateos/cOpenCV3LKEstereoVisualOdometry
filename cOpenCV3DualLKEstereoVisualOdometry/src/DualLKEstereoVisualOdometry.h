@@ -16,6 +16,8 @@
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/imgproc/imgproc.hpp"
 #include "opencv2/calib3d/calib3d.hpp"
+#include <opencv2/core/utility.hpp>
+#include <opencv2/viz.hpp>
 #include "rigid_transformation.h"
 #include "binned_detector.h"
 #include "opencv3_util.h"
@@ -78,21 +80,20 @@ public :
 
 	//Visualization objects
 	Mat cpImg;
+    viz::Viz3d myWindow;
 //public:
-	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c):bd(3,10){
+	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c):bd(3,10,10),myWindow("Coordinate Frame"){
 		cout << pcurFrameL_c.rows << ","<<pcurFrameL_c.cols<<endl;
 		pcurFrameL_c.copyTo(curFrameL_c);
 		pcurFrameR_c.copyTo(curFrameR_c);
 		cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);
 		cvtColor(curFrameR_c, curFrameR, CV_BGR2GRAY);
 
-		sm=StereoBM::create(16*4,15);//9);
-		sm->compute(curFrameL,curFrameR,curDisp);
-		detector = ORB::create(1000);//number of features to detect
-		extractor = ORB::create();
-		indexParams = makePtr<flann::LshIndexParams> (6, 12, 1);
-		searchParams = makePtr<flann::SearchParams>(50);
-		matcher = makePtr<FlannBasedMatcher>(indexParams, searchParams);
+		//detector = ORB::create(1000);//number of features to detect
+		//extractor = ORB::create();
+		//indexParams = makePtr<flann::LshIndexParams> (6, 12, 1);
+		//searchParams = makePtr<flann::SearchParams>(50);
+		//matcher = makePtr<FlannBasedMatcher>(indexParams, searchParams);
 
 		//detector->detect(curFrameL, curKeypointsL);
 		bd.binnedDetection(curFrameL, curKeypointsL);
@@ -101,19 +102,29 @@ public :
         //cornerSubPix(curFrameL, curPointsL, subPixWinSize, Size(-1,-1), termcrit);
 		//detector->detect(curFrameR, curKeypointsR);
 		bd.binnedDetection(curFrameR, curKeypointsR);
-		extractor->compute(curFrameL, curKeypointsL, curDescriptorsL);
-		extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
+		//extractor->compute(curFrameL, curKeypointsL, curDescriptorsL);
+		//extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
 		//Global transformations
-		Rg  = (Mat_<double>(3, 3) << 1., 0., 0., 0., 1., 0., 0., 0., 1.);
+		Rg  = (Mat_<double>(3, 3) << 1., 0., 0.,
+				                     0., 1., 0.,
+									 0., 0., 1.);
 		tg  = (Mat_<double>(3, 1) << 0., 0., 0.);
-		Rgl = (Mat_<double>(3, 3) << 1., 0., 0., 0., 1., 0., 0., 0., 1.);
+		Rgl = (Mat_<double>(3, 3) << 1., 0., 0.,
+				                     0., 1., 0.,
+									 0., 0., 1.);
 		tgl = (Mat_<double>(3, 1) << 0., 0., 0.);
-		Rgr = (Mat_<double>(3, 3) << 1., 0., 0., 0., 1., 0., 0., 0., 1.);
+		Rgr = (Mat_<double>(3, 3) << 1., 0., 0.,
+				                     0., 1., 0.,
+									 0., 0., 1.);
 		tgr = (Mat_<double>(3, 1) << 0., 0., 0.);
 		//Local transformations
-		Rll = (Mat_<double>(3, 3) << 1., 0., 0., 0., 1., 0., 0., 0., 1.);
+		Rll = (Mat_<double>(3, 3) << 1., 0., 0.,
+				                     0., 1., 0.,
+									 0., 0., 1.);
 		tll = (Mat_<double>(3, 1) << 0., 0., 0.);
-		Rlr = (Mat_<double>(3, 3) << 1., 0., 0., 0., 1., 0., 0., 0., 1.);
+		Rlr = (Mat_<double>(3, 3) << 1., 0., 0.,
+				                     0., 1., 0.,
+									 0., 0., 1.);
 		tlr = (Mat_<double>(3, 1) << 0., 0., 0.);
 
         // relative scale
@@ -137,7 +148,22 @@ public :
 				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
 								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
 								   0.00,  0.00, 1./Tx,  0);
+		// Stereo 3D data extraction
+		sm=StereoBM::create(16*3,11);//9);
+		sm->compute(curFrameL,curFrameR,curDisp);
         reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+        //bilateralFilterPointCloud(curPointCloud);
+
+        //Visualization
+    	//Display variables
+        myWindow.showWidget("Coordinate Widget", viz::WCoordinateSystem());
+        viz::WLine axis(Point3f(-1.0f,-1.0f,-1.0f), Point3f(1.0f,1.0f,1.0f));
+        axis.setRenderingProperty(viz::LINE_WIDTH, 1.0);
+        myWindow.showWidget("Line Widget", axis);
+        viz::WCube cube_widget(Point3f(0.5,0.5,0.0), Point3f(0.0,0.0,-0.5), true, viz::Color::blue());
+        cube_widget.setRenderingProperty(viz::LINE_WIDTH, 4.0);
+        myWindow.showWidget("Cube Widget", cube_widget);
+
 	}
 	virtual ~DualLKEstereoVisualOdometry(){}
 	// function performs ratiotest
@@ -199,7 +225,7 @@ public :
 		}
 		uvd= Mat(vp);
 	}
-	bool is2DpointInFrame(Point2f& p){
+	inline bool is2DpointInFrame(Point2f& p){
 		return p.x>=0 && p.x<curFrameL.cols-1 && p.y>=0 && p.y<curFrameL.rows-1;
 	}
 	void opticalFlowPyrLKTrack(){
@@ -263,21 +289,21 @@ public :
 					p2f2.x+=disp;
 					p2f2.y+=cpImg.rows/2;
 					line(cpImg,ppx,p2f2,Scalar(0, 255, 0));
-					if(pz<40.5 && pz>0.0){
+					if(pz<50.5 && pz>0.0){
 						putText(cpImg,toString(pz)+":"+toString(d),ppx,1,1,Scalar(0, 255, 255));
 						putText(cpImg,toString(cz),c2df1,1,1,Scalar(255, 255, 0));
 						prev3Dpts.push_back(p3d);
 						 cur3Dpts.push_back(c3d);
 						prev2Dpts.push_back(p2df1);
 						 cur2Dpts.push_back(c2df1);
-						//circle(cpImg,ppx ,10,Scalar(255, 0, 0));
-						//circle(cpImg,c2df1,10,Scalar(255, 0, 0));
+						circle(cpImg,ppx ,8,Scalar(255, 0, 0));
+						circle(cpImg,c2df1,8,Scalar(255, 0, 0));
 						line(cpImg,ppx,c2df1,Scalar(255,255,255));
 					}
 					else{
 						putText(cpImg,toString(cz),c2df1,1,1,Scalar(0, 64, 255));
 						//circle(cpImg,ppx,3,Scalar(0, 128, 255));
-						line(cpImg,ppx,c2df1,Scalar(0, 128, 255));
+						line(cpImg,ppx,c2df1,Scalar(0,   0, 255));
 						nbad++;
 					}
 				}
@@ -310,19 +336,26 @@ public :
 		Point2f dif2D;
 		//Point3f dif3D;
 		for(unsigned int i=0;i<proj2DafterPnP.size();i++){
-        	dif2D=prev2Dpts[i]-proj2DafterPnP[i];
+			//Visualization variables
+    		Point2f p2daf1=proj2DafterPnP[i];
+    		Point2f p2df1=prev2Dpts[i];
+    		Point2f ppxa(p2daf1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
+    		Point2f ppx(p2df1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
+    		//work out varibles
         	//dif3D=prev3Dpts[i]-prevAfterFitting[i];
-        	float dp=sqrt(dif2D.dot(dif2D));
+        	float dp=distPoint2f(prev2Dpts[i],proj2DafterPnP[i]);
         	//float dp3D=sqrt(dif3D.dot(dif3D));
         	tdp+=dp;
-        	if(dp>5.0){
+        	if(dp>1.0){
         		//cout <<prev2Dpts[i]<<":"<<dp<<"~" <<proj2DafterPnP[i] << endl;
+    			line(cpImg,ppx,ppxa,Scalar(0, 0, 255),2);
         	}
         	else{
         		 cur3DptsClean.push_back( cur3Dpts[i]);
         		prev3DptsClean.push_back(prev3Dpts[i]);
         		 cur2DptsClean.push_back( cur2Dpts[i]);
         		prev2DptsClean.push_back(prev2Dpts[i]);
+    			line(cpImg,ppx,ppxa,Scalar(0, 255, 255),5);
         	}
 		}
 
@@ -331,14 +364,6 @@ public :
  		curPointsL=cur2DptsClean;
  		prevPointsL=prev2DptsClean;
 
-		for(size_t i=0;i<proj2DafterPnP.size();i++){
-    		Point2f p2daf1=proj2DafterPnP[i];
-    		Point2f p2df1=prev2Dpts[i];
-    		Point2f ppxa(p2daf1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
-    		Point2f ppx(p2df1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
-			line(cpImg,ppx,ppxa,Scalar(0, 0, 255));
-
-		}
 		//reprojection mean error
 		tdp/=proj2DafterPnP.size();
 		cout << "tdp0="<< tdp << endl;
@@ -368,6 +393,52 @@ public :
 		}
 
 	}
+	//bilateral filter to a pointcloud from a stereo disparity
+	//invalid values are 10000
+	// it doesn't improve the accuracy or is bad implemented
+	void bilateralFilterPointCloud(Mat &pointCloud){
+        Mat splitImgs[3];
+        split(pointCloud,splitImgs);
+        Mat depth_flt=splitImgs[2];
+        //Change invalid depth with quiet_NaN
+        cout <<"depth_flt.type"<<type2str(depth_flt.type())<<endl;
+        Mat invalidDepthMask=depth_flt>=10000.0;
+
+        Mat depth = Mat(depth_flt.size(), CV_32FC1, Scalar(0));
+        const double depth_sigma = 0.03*4;
+        const double space_sigma = 4.5;  // in pixels
+        depth_flt.setTo(-5*depth_sigma, invalidDepthMask);
+        bilateralFilter(depth_flt, depth, -1, depth_sigma, space_sigma);
+        //depth.setTo(std::numeric_limits<float>::quiet_NaN(), invalidDepthMask);
+        depth.setTo(10000.0, invalidDepthMask);
+        splitImgs[2]=depth;
+        merge(splitImgs,3,pointCloud);
+	}
+	void showCloud(string widgetName,Mat &Rg,Mat tg){
+        Affine3d *camPose=new Affine3d(Rg,tg);
+        string s0("CPW");
+        string s1("CPW_FRUSTUM");
+        viz::WCameraPosition *cpw=new viz::WCameraPosition(0.05); // Coordinate axes
+        viz::WCameraPosition *cpw_frustum=new viz::WCameraPosition(Matx33d(K),curFrameL_c,0.91); // Camera frustum
+        myWindow.showWidget(s0+widgetName,*cpw,*camPose);
+        myWindow.showWidget(s1+widgetName,*cpw_frustum,*camPose);
+		Mat pc;
+		curPointCloud.copyTo(pc);
+		int s=pc.rows*pc.cols;
+	    Point3f* data = pc.ptr<cv::Point3f>();
+	    for(int i = 0; i < s; ++i){
+	    	if(data[i].z<1.0 || data[i].z>=40.0){
+	    		//cout <<"NaN"<<endl;
+	    		//data[i].z=std::numeric_limits<float>::quiet_NaN();
+	    		data[i].z=std::numeric_limits<float>::quiet_NaN();
+	    	}
+	    }
+        //Mat invalidDepthMask=depth_flt>=10000.0;
+        //depth.setTo(std::numeric_limits<float>::quiet_NaN(), invalidDepthMask);
+      	viz::WCloud *wpc=new viz::WCloud(pc,curFrameL_c);
+      	//viz::WCloud *wpc=new viz::WCloud(pc);
+        myWindow.showWidget(widgetName+"cloud",*wpc,*camPose);
+	}
 	void stepStereoOdometry(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
 		// prev<=cur
 		curDisp.copyTo(prevDisp);
@@ -384,6 +455,7 @@ public :
 		//Compute disparity and 3D point cloud
 		sm->compute(curFrameL, curFrameR, curDisp);
         reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+        //bilateralFilterPointCloud(curPointCloud);
 
 		//Mix disparity and previous left frame
         //dispC8 if to be visualized
@@ -405,8 +477,10 @@ public :
 
 		selectGoodPoints();
 
+		// Estimate relative pose from previous to current frame Rll and tll
+
 		Mat rvec;//rotation vector
-		vector<Point3f> prevAfterFitting;
+		//vector<Point3f> prevAfterFitting;
     	//Mat  cur3DMat=Mat( cur3Dpts).reshape(1);
     	//Mat prev3DMat=Mat(prev3Dpts).reshape(1);
         //rigidTransformation(cur3DMat,prev3DMat,Rll,tll);
@@ -416,7 +490,7 @@ public :
         //cv::solvePnP(cur3Dpts,prev2Dpts,K,noArray(),r,t,0,SOLVEPNP_ITERATIVE);
 
         Mat inliers;
-        cv::solvePnPRansac(cur3Dpts,prev2Dpts,K,noArray(),rr,tr,false,1000,1.0,0.99,inliers);
+        cv::solvePnPRansac(cur3Dpts,prev2Dpts,K,noArray(),rr,tr,false,100,1.5,0.99,inliers);
         vector<Point3f> prev3DptsIn,cur3DptsIn;
         vector<Point2f> prev2DptsIn, cur2DptsIn;
         for(int i=0;i<inliers.rows;i++){
@@ -426,10 +500,27 @@ public :
         	prev2DptsIn.push_back(prev2Dpts[idx]);
         	 cur2DptsIn.push_back( cur2Dpts[idx]);
         }
-        rri=rr;
-        tri=tr;
-        cv::solvePnPRansac(cur3DptsIn,prev2DptsIn,K,noArray(),rri,tri,true,1000,0.5,0.99,inliers);
-        rvec=rri; tll=tri;
+         cur3Dpts=cur3DptsIn;
+        prev3Dpts=prev3DptsIn;
+         cur2Dpts=cur2DptsIn;
+        prev2Dpts=prev2DptsIn;
+        cv::solvePnPRansac(cur3Dpts,prev2Dpts,K,noArray(),rr,tr,true,100,1.0,0.99,inliers);
+        prev3DptsIn.clear();
+         cur3DptsIn.clear();
+        prev2DptsIn.clear();
+         cur2DptsIn.clear();
+        for(int i=0;i<inliers.rows;i++){
+        	int idx=inliers.at<int>(i,0);
+        	 cur3DptsIn.push_back( cur3Dpts[idx]);
+        	prev3DptsIn.push_back(prev3Dpts[idx]);
+        	prev2DptsIn.push_back(prev2Dpts[idx]);
+        	 cur2DptsIn.push_back( cur2Dpts[idx]);
+        }
+         cur3Dpts=cur3DptsIn;
+        prev3Dpts=prev3DptsIn;
+         cur2Dpts=cur2DptsIn;
+        prev2Dpts=prev2DptsIn;
+        rvec=rr; tll=tr;
         cv::Rodrigues(rvec,Rll);
 
         // curPointsL=cur2DptsIn;
@@ -438,9 +529,10 @@ public :
 
         //cv::transform(cur3DMat,prev3DMatAfter,cur3DMat);
 		//erase x and z rotations since car only rotate on y
-        //rvec.at<float>(0.0)=0;
-        //rvec.at<float>(2.0)=0;
+        rvec.at<float>(0.0)=0;
+        rvec.at<float>(2.0)=0;
 
+        // Update global pose Rgl and tgl
         Rodrigues(rvec,Rll);
 		//Rodrigues(rvec,Rll);
         //cout <<"inliers after fitting PnPRansac="<< inliers.size() << endl;
@@ -474,9 +566,13 @@ public :
 		}
 		cout << "#curPoints" <<  curPointsL.size()<<endl;
 
-		//Visualization
+		//Visualization 2D
   		resize(cpImg, cpImg, Size(), 0.970,0.970);
         imshow("prevDisp",cpImg);
+
+        //Visualization 3D
+        myWindow.spinOnce(1, true);
+
 	}
 };
 
