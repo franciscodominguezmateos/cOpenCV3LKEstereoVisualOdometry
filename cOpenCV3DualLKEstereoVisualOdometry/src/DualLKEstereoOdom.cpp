@@ -59,7 +59,6 @@ string get_sequence(int n) {
 	return NULL;
 }
 int main(int argc, char** argv) {
-
 	if (argc< 3) {
 		cout << "Enter path to data.. ./odo <path> <numFiles>\n";
 		return -1;
@@ -79,7 +78,9 @@ int main(int argc, char** argv) {
 	cur_frame_c2 = imread(path+"/image_2/000000.png");
 	cur_frame_c3= imread(path+"/image_3/000000.png");
 	vector<Mat> vm=getKittiPoses(path+"/../poses/00.txt");
-	DualLKEstereoVisualOdometry dsvo2(cur_frame_c2,cur_frame_c3);
+	DualLKEstereoVisualOdometry dsvo2;
+
+	dsvo2.init(cur_frame_c2,cur_frame_c3);
 
 	float l=0;//trajectory length
 	for (int i=1; i<=SEQ_MAX; i+=1) {
@@ -106,9 +107,11 @@ int main(int argc, char** argv) {
 		circle(top_view2, Point(200+t2_.at<double>(0, 2)/2.0, (200+t2_.at<double>(0, 0)/2.0)), 3, Scalar(0, 255, 0), -1);
 		circle(top_view2, Point(200+t2_.at<double>(0, 2)/2.0, (200+t2_.at<double>(0, 0)/2.0)), 2, Scalar(0, 0, 255), -1);
   		imshow("Top view2", top_view2);
-  		if(i%25==0)
+  		auto key=waitKey(1) & 0xFF;
+  		if (key!=255) cout << "key="<<key<<endl;
+  		if(i%250==0 || key=='a')
   			dsvo2.showCloud(get_sequence(i),dsvo2.Rgl,dsvo2.tgl);
- 		if (waitKey(1) == 27) break;
+ 		if (key == 27) break;
 	}
 	return 0;
 }

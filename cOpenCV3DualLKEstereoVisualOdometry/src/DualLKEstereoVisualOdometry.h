@@ -25,6 +25,129 @@
 using namespace std;
 using namespace cv;
 
+class StereoCamera{
+public:
+	// Left = 1 and Right = 2
+	// Intrinsic matrix and distortion parameter for each camera
+	Mat KL,distL;
+	Mat KR,distR;
+	Mat R,T;
+	Mat E,F;
+	Mat R1,R2,P1,P2,Q;
+	//for a horizontal camera should be T.at<double>(0)
+	double baseLine;
+	Size imageSize;
+	// Common rectified intrinsic matrix
+	Mat K;
+	//Create transformation and rectify maps
+	Mat cam1map1, cam1map2;
+	Mat cam2map1, cam2map2;
+
+	StereoCamera(string s){
+		load(s);
+	}
+	StereoCamera(){
+		//default Kitty parameters
+		double f = (double)(7.188560000000e+02 + 7.188560000000e+02)/2;
+		Point2f pp=Point2f((float)6.071928000000e+02, (float)1.852157000000e+02);
+		double baseLine=3.861448000000e+02/f*16;//base = -P2_roi(1,4)/P2_roi(1,1)
+		setParams(f,pp,baseLine);
+	}
+	StereoCamera(double f,Point2f pp,double baseline){
+		setParams(f,pp,baseline);
+	}
+	StereoCamera(Mat KLp,Mat distLp,
+			     Mat KRp,Mat distRp,
+				 Mat Rp,Mat Tp,Mat Ep,Mat Fp){
+		setParams(KLp,distLp,KRp,distRp,Rp,Tp,Ep,Fp);
+	}
+	void save(string out_file){
+		  FileStorage fs(out_file, FileStorage::WRITE);
+		  if(!fs.isOpened())
+			  throw runtime_error("File not opened in StereoCamera::save "+out_file);
+		  fs << "KL" << KL;
+		  fs << "KR" << KR;
+		  fs << "DL" << distL;
+		  fs << "DR" << distR;
+		  fs << "R" << R;
+		  fs << "T" << T;
+		  fs << "E" << E;
+		  fs << "F" << F;
+	}
+	void load(string in_file){
+		  FileStorage fs(in_file, FileStorage::READ);
+		  if(!fs.isOpened())
+			  throw runtime_error("File not opened in StereoCamera::load "+in_file);
+		  fs["KL"]>>KL;
+		  fs["DL"]>>distL;
+		  fs["KR"]>>KR;
+		  fs["DR"]>>distR;
+		  fs["R"] >>R;
+		  fs["T"] >>T;
+		  fs["E"] >>E;
+		  fs["F"] >>F;
+		  setParams(KL,distL,KR,distR,R,T,E,F);
+	}
+	void setParams(double f,Point2f pp,double baseline){
+	    baseLine=baseline;
+        //Intrinsic kitti values 00
+	    double cx=pp.x;
+	    double cy=pp.y;
+	    double Tx=baseLine;
+	    //Intrinsic Matrix
+		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
+				                   0.00,  f   , cy,
+								   0.00,  0.00, 1.00);
+		//reprojection Matrix
+		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
+				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
+								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
+								   0.00,  0.00, 1./Tx,  0);
+	}
+	void setParams(Mat KLp,Mat distLp,
+		     	   Mat KRp,Mat distRp,
+			       Mat Rp,Mat Tp,Mat Ep,Mat Fp){
+	KL=KLp; distL=distLp;
+	KR=KRp; distR=distRp;
+	R=Rp; T=Tp;
+	E=Ep, F=Fp;
+	// but could be P1.at<double>(0,3)??
+	baseLine=Tp.at<double>(0,0);
+	int rectivy_scale=0; // 0=full_crop, 1=no_crop
+	stereoRectify(KL, distL, KR, distR, imageSize, R, T, R1, R2, P1, P2, Q,CALIB_ZERO_DISPARITY,rectivy_scale);
+	K=(Mat_<double>(3, 3) <<
+		P1.at<double>(0,0),P1.at<double>(0,1),P1.at<double>(0,2),
+		P1.at<double>(1,0),P1.at<double>(1,1),P1.at<double>(1,2),
+		P1.at<double>(2,0),P1.at<double>(2,2),P1.at<double>(2,2));
+    // Compute undistortion and rectification mapping
+	initUndistortRectifyMap(KL, distL, R1, P1, imageSize , CV_16SC2, cam1map1, cam1map2);
+	initUndistortRectifyMap(KR, distR, R2, P2, imageSize , CV_16SC2, cam2map1, cam2map2);
+	}
+	Mat rectifyLeft(Mat imgL){
+		Mat leftStereoUndistorted; //Create matrices for storing rectified images
+		//Rectify and undistort images
+		remap(imgL, leftStereoUndistorted, cam1map1, cam1map2, INTER_LINEAR);
+		return leftStereoUndistorted;
+	}
+	Mat rectifyRight(Mat imgR){
+		Mat rightStereoUndistorted; //Create matrices for storing rectified images
+		//Rectify and undistort images
+		remap(imgR, rightStereoUndistorted, cam2map1, cam2map2, INTER_LINEAR);
+		return rightStereoUndistorted;
+	}
+	Mat getLeftFromStereo(Mat imgS){
+		int w=imgS.cols>>1;
+		Rect r(0,0,w,imgS.rows);
+		Mat imgL(imgS(r));
+		return imgL;
+	}
+	Mat getRightFromStereo(Mat imgS){
+		int w=imgS.cols>>1;
+		Rect r(w,0,w,imgS.rows);
+		Mat imgR(imgS(r));
+		return imgR;
+	}
+};
 class DualLKEstereoVisualOdometry {
 public :
 	Mat curFrameL,curFrameL_c, prevFrameL,prevFrameL_c, curFrameL_kp, prevFrameL_kp;
@@ -49,6 +172,8 @@ public :
 	Ptr<DescriptorMatcher> matcher;
 	// relative scale
 	double scale;
+	// Rectify CAMERA PARAMS
+	// after rectifying both cameras have same parameters
 	//double f = (double)(8.941981e+02 + 8.927151e+02)/2;
 	//Point2f pp((float)6.601406e+02, (float)2.611004e+02);
 	double f ; // focal length in pixels as in K intrinsic matrix
@@ -82,55 +207,10 @@ public :
 	Mat cpImg;
     viz::Viz3d myWindow;
 //public:
-	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c):bd(3,10,10),myWindow("Coordinate Frame"){
-		cout << pcurFrameL_c.rows << ","<<pcurFrameL_c.cols<<endl;
-		pcurFrameL_c.copyTo(curFrameL_c);
-		pcurFrameR_c.copyTo(curFrameR_c);
-		cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);
-		cvtColor(curFrameR_c, curFrameR, CV_BGR2GRAY);
-
-		//detector = ORB::create(1000);//number of features to detect
-		//extractor = ORB::create();
-		//indexParams = makePtr<flann::LshIndexParams> (6, 12, 1);
-		//searchParams = makePtr<flann::SearchParams>(50);
-		//matcher = makePtr<FlannBasedMatcher>(indexParams, searchParams);
-
-		//detector->detect(curFrameL, curKeypointsL);
-		bd.binnedDetection(curFrameL, curKeypointsL);
-		curPointsL.clear();
-		KeyPoint::convert(curKeypointsL, curPointsL);
-        //cornerSubPix(curFrameL, curPointsL, subPixWinSize, Size(-1,-1), termcrit);
-		//detector->detect(curFrameR, curKeypointsR);
-		bd.binnedDetection(curFrameR, curKeypointsR);
-		//extractor->compute(curFrameL, curKeypointsL, curDescriptorsL);
-		//extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
-		//Global transformations
-		Rg  = (Mat_<double>(3, 3) << 1., 0., 0.,
-				                     0., 1., 0.,
-									 0., 0., 1.);
-		tg  = (Mat_<double>(3, 1) << 0., 0., 0.);
-		Rgl = (Mat_<double>(3, 3) << 1., 0., 0.,
-				                     0., 1., 0.,
-									 0., 0., 1.);
-		tgl = (Mat_<double>(3, 1) << 0., 0., 0.);
-		Rgr = (Mat_<double>(3, 3) << 1., 0., 0.,
-				                     0., 1., 0.,
-									 0., 0., 1.);
-		tgr = (Mat_<double>(3, 1) << 0., 0., 0.);
-		//Local transformations
-		Rll = (Mat_<double>(3, 3) << 1., 0., 0.,
-				                     0., 1., 0.,
-									 0., 0., 1.);
-		tll = (Mat_<double>(3, 1) << 0., 0., 0.);
-		Rlr = (Mat_<double>(3, 3) << 1., 0., 0.,
-				                     0., 1., 0.,
-									 0., 0., 1.);
-		tlr = (Mat_<double>(3, 1) << 0., 0., 0.);
-
+	DualLKEstereoVisualOdometry():bd(3,10,10),myWindow("Coordinate Frame"){
         // relative scale
         scale = 1.0;
-
-		//f = (double)(8.941981e+02 + 8.927151e+02)/2;
+        //f = (double)(8.941981e+02 + 8.927151e+02)/2;
 		//pp((float)6.601406e+02, (float)2.611004e+02);
         //Intrinsic kitti values 00
 		f = (double)(7.188560000000e+02 + 7.188560000000e+02)/2;
@@ -148,22 +228,114 @@ public :
 				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
 								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
 								   0.00,  0.00, 1./Tx,  0);
-		// Stereo 3D data extraction
-		sm=StereoBM::create(16*3,11);//9);
-		sm->compute(curFrameL,curFrameR,curDisp);
-        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
-        //bilateralFilterPointCloud(curPointCloud);
+	}
+	DualLKEstereoVisualOdometry(double f,Point2f pp,double baseLine):f(f),pp(pp),baseLine(baseLine),bd(3,10,10),myWindow("Coordinate Frame"){
+        // relative scale
+        scale = 1.0;
+	    double cx=pp.x;
+	    double cy=pp.y;
+	    double Tx=baseLine;
+	    //Intrinsic Matrix
+		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
+				                   0.00,  f   , cy,
+								   0.00,  0.00, 1.00);
+		//reprojection Matrix
+		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
+				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
+								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
+								   0.00,  0.00, 1./Tx,  0);
+	}
+/*	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c):bd(3,10,10),myWindow("Coordinate Frame"){
+        // relative scale
+        scale = 1.0;
+        //f = (double)(8.941981e+02 + 8.927151e+02)/2;
+		//pp((float)6.601406e+02, (float)2.611004e+02);
+        //Intrinsic kitti values 00
+		f = (double)(7.188560000000e+02 + 7.188560000000e+02)/2;
+		pp=Point2f((float)6.071928000000e+02, (float)1.852157000000e+02);
+		baseLine=3.861448000000e+02/f*16;//base = -P2_roi(1,4)/P2_roi(1,1)
+	    double cx=pp.x;
+	    double cy=pp.y;
+	    double Tx=baseLine;
+	    //Intrinsic Matrix
+		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
+				                   0.00,  f   , cy,
+								   0.00,  0.00, 1.00);
+		//reprojection Matrix
+		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
+				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
+								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
+								   0.00,  0.00, 1./Tx,  0);
+		init(pcurFrameL_c,pcurFrameR_c);
+	}*/
+	void init(Mat &pcurFrameL_c,Mat &pcurFrameR_c){
+			cout << pcurFrameL_c.rows << ","<<pcurFrameL_c.cols<<endl;
+			pcurFrameL_c.copyTo(curFrameL_c);
+			pcurFrameR_c.copyTo(curFrameR_c);
+			cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);
+			cvtColor(curFrameR_c, curFrameR, CV_BGR2GRAY);
 
-        //Visualization
-    	//Display variables
-        myWindow.showWidget("Coordinate Widget", viz::WCoordinateSystem());
-        viz::WLine axis(Point3f(-1.0f,-1.0f,-1.0f), Point3f(1.0f,1.0f,1.0f));
-        axis.setRenderingProperty(viz::LINE_WIDTH, 1.0);
-        myWindow.showWidget("Line Widget", axis);
-        viz::WCube cube_widget(Point3f(0.5,0.5,0.0), Point3f(0.0,0.0,-0.5), true, viz::Color::blue());
-        cube_widget.setRenderingProperty(viz::LINE_WIDTH, 4.0);
-        myWindow.showWidget("Cube Widget", cube_widget);
+			//detector = ORB::create(1000);//number of features to detect
+			//extractor = ORB::create();
+			//indexParams = makePtr<flann::LshIndexParams> (6, 12, 1);
+			//searchParams = makePtr<flann::SearchParams>(50);
+			//matcher = makePtr<FlannBasedMatcher>(indexParams, searchParams);
 
+			//detector->detect(curFrameL, curKeypointsL);
+			bd.binnedDetection(curFrameL, curKeypointsL);
+			curPointsL.clear();
+			KeyPoint::convert(curKeypointsL, curPointsL);
+	        //cornerSubPix(curFrameL, curPointsL, subPixWinSize, Size(-1,-1), termcrit);
+			//detector->detect(curFrameR, curKeypointsR);
+			bd.binnedDetection(curFrameR, curKeypointsR);
+			//extractor->compute(curFrameL, curKeypointsL, curDescriptorsL);
+			//extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
+			//Global transformations
+			Rg  = (Mat_<double>(3, 3) << 1., 0., 0.,
+					                     0., 1., 0.,
+										 0., 0., 1.);
+			tg  = (Mat_<double>(3, 1) << 0., 0., 0.);
+			Rgl = (Mat_<double>(3, 3) << 1., 0., 0.,
+					                     0., 1., 0.,
+										 0., 0., 1.);
+			tgl = (Mat_<double>(3, 1) << 0., 0., 0.);
+			Rgr = (Mat_<double>(3, 3) << 1., 0., 0.,
+					                     0., 1., 0.,
+										 0., 0., 1.);
+			tgr = (Mat_<double>(3, 1) << 0., 0., 0.);
+			//Local transformations
+			Rll = (Mat_<double>(3, 3) << 1., 0., 0.,
+					                     0., 1., 0.,
+										 0., 0., 1.);
+			tll = (Mat_<double>(3, 1) << 0., 0., 0.);
+			Rlr = (Mat_<double>(3, 3) << 1., 0., 0.,
+					                     0., 1., 0.,
+										 0., 0., 1.);
+			tlr = (Mat_<double>(3, 1) << 0., 0., 0.);
+
+			// Stereo 3D data extraction
+			sm=StereoBM::create(16*6,9);//9);
+			sm->compute(curFrameL,curFrameR,curDisp);
+	        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+	        //bilateralFilterPointCloud(curPointCloud);
+			//Mix disparity and current left frame
+	        Mat cdisp8;
+			Mat cdispC8;
+			curDisp.convertTo(cdisp8,CV_8U);
+			cvtColor(cdisp8,cdispC8,CV_GRAY2BGR);
+			addWeighted(cdispC8,0.2,curFrameL_c,0.8,0.0,cdispC8);
+			imshow("test",cdispC8);
+			//waitKey(-1);
+
+	        //Visualization
+	    	//Display variables
+	        myWindow.showWidget("Coordinate Widget", viz::WCoordinateSystem());
+	        viz::WLine axis(Point3f(-1.0f,-1.0f,-1.0f), Point3f(1.0f,1.0f,1.0f));
+	        axis.setRenderingProperty(viz::LINE_WIDTH, 1.0);
+	        myWindow.showWidget("Line Widget", axis);
+	        viz::WCube cube_widget(Point3f(0.5,0.5,0.0), Point3f(0.0,0.0,-0.5), true, viz::Color::blue());
+	        cube_widget.setRenderingProperty(viz::LINE_WIDTH, 4.0);
+	        myWindow.showWidget("Cube Widget", cube_widget);
 	}
 	virtual ~DualLKEstereoVisualOdometry(){}
 	// function performs ratiotest
@@ -282,14 +454,14 @@ public :
 				Point3f dif3D=p3d-c3d;
 				float d=sqrt(dif3D.dot(dif3D));
 				//d should be velocity/time
-				if (d<50e3/36000){
+				if (true /*d<50e3/36000*/){
 					//cout << "dif3D="<<dif3D<<":"<<d<<endl;
 					int disp=prevDisp.at<unsigned short>(p2df1)>>4;//16-bit fixed-point disparity map (where each disparity value has 4 fractional bits)
 					Point2f p2f2=prevPointsL[i];
 					p2f2.x+=disp;
 					p2f2.y+=cpImg.rows/2;
 					line(cpImg,ppx,p2f2,Scalar(0, 255, 0));
-					if(pz<50.5 && pz>0.0){
+					if(pz<5000.5 && pz>0.0){
 						putText(cpImg,toString(pz)+":"+toString(d),ppx,1,1,Scalar(0, 255, 255));
 						putText(cpImg,toString(cz),c2df1,1,1,Scalar(255, 255, 0));
 						prev3Dpts.push_back(p3d);
@@ -318,7 +490,7 @@ public :
         		dbad++;
         	}
         }
-        cout <<"#prevPointsL"<<prevPointsL.size() << endl;
+        cout <<"#prevPointsL   ="<<prevPointsL.size() << endl;
         cout <<"#cbad distance ="<<cbad<<endl;
         cout <<"#nbad too far  ="<<nbad<<endl;
         cout <<"#dbad disparity="<<dbad<<endl;
@@ -420,8 +592,9 @@ public :
         string s1("CPW_FRUSTUM");
         viz::WCameraPosition *cpw=new viz::WCameraPosition(0.05); // Coordinate axes
         viz::WCameraPosition *cpw_frustum=new viz::WCameraPosition(Matx33d(K),curFrameL_c,0.91); // Camera frustum
-        myWindow.showWidget(s0+widgetName,*cpw,*camPose);
-        myWindow.showWidget(s1+widgetName,*cpw_frustum,*camPose);
+        //myWindow.showWidget(s0+widgetName,*cpw,*camPose);
+        //myWindow.showWidget(s1+widgetName,*cpw_frustum,*camPose);
+        myWindow.setViewerPose(*camPose);
 		Mat pc;
 		curPointCloud.copyTo(pc);
 		int s=pc.rows*pc.cols;
@@ -439,7 +612,7 @@ public :
       	//viz::WCloud *wpc=new viz::WCloud(pc);
         myWindow.showWidget(widgetName+"cloud",*wpc,*camPose);
 	}
-	void stepStereoOdometry(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
+	void current2Previous(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
 		// prev<=cur
 		curDisp.copyTo(prevDisp);
 		curPointCloud.copyTo(prevPointCloud);
@@ -451,42 +624,17 @@ public :
         // New values of current frame
 		pcurFrameL_c.copyTo(curFrameL_c);	      pcurFrameR_c.copyTo(curFrameR_c);
 		cvtColor(curFrameL_c, curFrameL, CV_BGR2GRAY);		cvtColor(curFrameR_c, curFrameR, CV_BGR2GRAY);
-
-		//Compute disparity and 3D point cloud
-		sm->compute(curFrameL, curFrameR, curDisp);
-        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
-        //bilateralFilterPointCloud(curPointCloud);
-
-		//Mix disparity and previous left frame
-        //dispC8 if to be visualized
-        Mat disp8;
-		Mat dispC8;
-        prevDisp.convertTo(disp8, CV_8U);
-		cvtColor(disp8,dispC8,CV_GRAY2BGR);
-		addWeighted(dispC8,0.2,prevFrameL_c,0.8,0.0,dispC8);
-		//Mix disparity and current left frame
-        Mat cdisp8;
-		Mat cdispC8;
-		curDisp.convertTo(cdisp8,CV_8U);
-		cvtColor(cdisp8,cdispC8,CV_GRAY2BGR);
-		addWeighted(cdispC8,0.2,curFrameL_c,0.8,0.0,cdispC8);
-		//Stack previous and current frame in a image to visualize
-		cpImg=stackV(cdispC8,dispC8);
-
-		opticalFlowPyrLKTrack();
-
-		selectGoodPoints();
-
+	}
+	void buildRelativePose(Mat &rr,Mat &tr){
 		// Estimate relative pose from previous to current frame Rll and tll
 
-		Mat rvec;//rotation vector
 		//vector<Point3f> prevAfterFitting;
     	//Mat  cur3DMat=Mat( cur3Dpts).reshape(1);
     	//Mat prev3DMat=Mat(prev3Dpts).reshape(1);
         //rigidTransformation(cur3DMat,prev3DMat,Rll,tll);
         //Rodrigues(Rll,rvec);
 
-        Mat r,t,rr,tr,rri,tri;
+        //Mat r,t,rr,tr,rri,tri;
         //cv::solvePnP(cur3Dpts,prev2Dpts,K,noArray(),r,t,0,SOLVEPNP_ITERATIVE);
 
         Mat inliers;
@@ -520,6 +668,32 @@ public :
         prev3Dpts=prev3DptsIn;
          cur2Dpts=cur2DptsIn;
         prev2Dpts=prev2DptsIn;
+	}
+	void buildPointCould(){
+		//Compute disparity and 3D point cloud
+		sm->compute(curFrameL, curFrameR, curDisp);
+        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+        //bilateralFilterPointCloud(curPointCloud);
+
+        // TO VISUALISE DISP
+		//Mix disparity and previous left frame
+        //dispC8 if to be visualised
+        Mat disp8;
+		Mat dispC8;
+        prevDisp.convertTo(disp8, CV_8U);
+		cvtColor(disp8,dispC8,CV_GRAY2BGR);
+		addWeighted(dispC8,0.2,prevFrameL_c,0.8,0.0,dispC8);
+		//Mix disparity and current left frame
+        Mat cdisp8;
+		Mat cdispC8;
+		curDisp.convertTo(cdisp8,CV_8U);
+		cvtColor(cdisp8,cdispC8,CV_GRAY2BGR);
+		addWeighted(cdispC8,0.2,curFrameL_c,0.8,0.0,cdispC8);
+		//Stack previous and current frame in a image to visualize
+		cpImg=stackV(cdispC8,dispC8);
+	}
+	void updatePose(Mat &rr,Mat &tr){
+		Mat rvec;//rotation vector
         rvec=rr; tll=tr;
         cv::Rodrigues(rvec,Rll);
 
@@ -553,21 +727,38 @@ public :
 		Rgl = Rll*Rgl;
 		//cout << "tgl"<< tgl << endl;
 		//cout << "Rgl"<< Rgl << endl;
-
-        //refresh traking points
-		cout << "#curPoints" <<  curPointsL.size()<<endl;
+	}
+	void refreshTrackingPoints(){
+		//refresh tracking points
+		cout << "#curPoints=" <<  curPointsL.size()<<endl;
 		if(curPointsL.size()<1950){//match point if there are few points
-	        //Keypoints detection
+			//Keypoints detection
 			curKeypointsL.clear();
 			bd.refreshDetection(curFrameL, curPointsL, curKeypointsL);
 			vector<Point2f> rPoints;
 			KeyPoint::convert(curKeypointsL, rPoints);
-		    curPointsL.insert(curPointsL.end(), rPoints.begin(), rPoints.end());
+			curPointsL.insert(curPointsL.end(), rPoints.begin(), rPoints.end());
 		}
 		cout << "#curPoints" <<  curPointsL.size()<<endl;
+	}
+	void stepStereoOdometry(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
+		current2Previous(pcurFrameL_c,pcurFrameR_c);
 
-		//Visualization 2D
-  		resize(cpImg, cpImg, Size(), 0.970,0.970);
+		buildPointCould();
+
+		opticalFlowPyrLKTrack();
+
+		selectGoodPoints();
+
+		Mat rr,tr;
+		buildRelativePose(rr,tr);
+
+        updatePose(rr,tr);
+
+		refreshTrackingPoints();
+
+		//Visualisation 2D
+  		resize(cpImg, cpImg, Size(), 0.5,0.5);
         imshow("prevDisp",cpImg);
 
         //Visualization 3D
