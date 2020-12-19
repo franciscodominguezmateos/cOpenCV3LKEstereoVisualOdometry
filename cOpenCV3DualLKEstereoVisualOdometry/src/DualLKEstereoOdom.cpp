@@ -27,7 +27,7 @@ THE SOFTWARE.
 
 #include "DualLKEstereoVisualOdometry.h"
 
-#define PI 3.14159265
+#define PI 3.14159265358979
 #define minFeatures 35
 
 using namespace std;
@@ -111,6 +111,8 @@ int main(int argc, char** argv) {
   		if (key!=255) cout << "key="<<key<<endl;
   		if(i%250==0 || key=='a')
   			dsvo2.showCloud(get_sequence(i),dsvo2.Rgl,dsvo2.tgl);
+  		if(key==' ')
+  			waitKey(0);
  		if (key == 27) break;
 	}
 	return 0;

@@ -314,7 +314,7 @@ public :
 			tlr = (Mat_<double>(3, 1) << 0., 0., 0.);
 
 			// Stereo 3D data extraction
-			sm=StereoBM::create(16*6,9);//9);
+			sm=StereoBM::create(16*6,5);//9);
 			sm->compute(curFrameL,curFrameR,curDisp);
 	        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
 	        //bilateralFilterPointCloud(curPointCloud);
@@ -341,7 +341,7 @@ public :
 	// function performs ratiotest
 	// to determine the best keypoint matches
 	// between consecutive poses
-	void ratioTest(vector<vector<DMatch> > &matches, vector<DMatch> &good_matches) {
+	void ratioTest(vector<vector<DMatch> > &matches, vector<DMatch> &good_matches) {/*
 		for (vector<vector<DMatch> >::iterator it = matches.begin(); it!=matches.end(); it++) {
 			if (it->size()>1 ) {
 				if ((*it)[0].distance/(*it)[1].distance > 0.6f) {
@@ -351,6 +351,13 @@ public :
 				it->clear();
 			}
 			if (!it->empty()) good_matches.push_back((*it)[0]);
+		}*/
+		for(vector<DMatch> &vdm:matches){
+			if(vdm.size()>1){
+				if(vdm[0].distance/vdm[1].distance>0.6) vdm.clear();
+			}
+			else vdm.clear();
+			if(!vdm.empty()) good_matches.push_back(vdm[0]);
 		}
 	}
 	inline void findGoodMatches(vector<KeyPoint> &keypoints_1,Mat &descriptors_1,
@@ -426,7 +433,6 @@ public :
         //cornerSubPix(prevFrameL, prevPointsL, subPixWinSize, Size(-1,-1), termcrit);
         //cornerSubPix( curFrameL,  curPointsL, subPixWinSize, Size(-1,-1), termcrit);
 	}
-
 	void selectGoodPoints(){
 		int cbad=0,nbad=0,dbad=0;
         prev3Dpts.clear();
@@ -442,7 +448,7 @@ public :
     		//cout << "p2df1="<< p2df1 <<endl;
     		//cout << "c2df1="<< c2df1 <<endl;
 
-    		//theses two points would be the same or be very close to each other
+    		//theses two points should be the same or be very close to each other
         	p3d=prevPointCloud.at<Point3f>(p2df1);
         	c3d= curPointCloud.at<Point3f>(c2df1);
     		//cout << "p3d="<< p3d <<endl;
@@ -454,16 +460,16 @@ public :
 				Point3f dif3D=p3d-c3d;
 				float d=sqrt(dif3D.dot(dif3D));
 				//d should be velocity/time
-				if (true /*d<50e3/36000*/){
+				if (d<500e3/36000){
 					//cout << "dif3D="<<dif3D<<":"<<d<<endl;
 					int disp=prevDisp.at<unsigned short>(p2df1)>>4;//16-bit fixed-point disparity map (where each disparity value has 4 fractional bits)
 					Point2f p2f2=prevPointsL[i];
-					p2f2.x+=disp;
+					p2f2.x-=disp;
 					p2f2.y+=cpImg.rows/2;
 					line(cpImg,ppx,p2f2,Scalar(0, 255, 0));
-					if(pz<5000.5 && pz>0.0){
-						putText(cpImg,toString(pz)+":"+toString(d),ppx,1,1,Scalar(0, 255, 255));
-						putText(cpImg,toString(cz),c2df1,1,1,Scalar(255, 255, 0));
+					if(pz<30 && pz>0.0){
+						putText(cpImg,toString(pz)+":"+toString(d),ppx  ,1,1,Scalar(0, 255, 255));
+						putText(cpImg,toString(cz)                ,c2df1,1,1,Scalar(255, 255, 0));
 						prev3Dpts.push_back(p3d);
 						 cur3Dpts.push_back(c3d);
 						prev2Dpts.push_back(p2df1);
@@ -486,7 +492,7 @@ public :
 				}
         	}
         	else{
-				circle(cpImg,ppx,3,Scalar(255, 0, 255));
+				circle(cpImg,ppx,3,Scalar(0, 0, 255));
         		dbad++;
         	}
         }
@@ -497,6 +503,81 @@ public :
         cout <<"#PointsL left  ="<<prevPointsL.size()-cbad-nbad-dbad<<endl;
         cout <<"prev3Dpts="<< prev3Dpts.size() << endl;
         cout <<"cur2DforPnP="<< cur2Dpts.size() << endl;
+	}
+	Mat allDistances(vector<Point3f> &pts3D){
+		int L=fmin(10,pts3D.size());
+		Mat r=Mat::zeros(L,L,CV_32F);
+		for(int i=0;i<L;i++){
+			for(int j=0;j<L;j++){
+				float d=distPoint3f(pts3D[i],pts3D[j]);
+				r.at<float>(i,j)=d;
+			}
+		}
+		return r;
+	}
+	Mat keepDist(){
+		Mat prevDist=allDistances(prev3Dpts);
+		Mat currDist=allDistances(cur3Dpts);
+		Mat dist;
+		absdiff(prevDist,currDist,dist);
+		//printMat(dist);
+		//this doesn't work!!!
+		//Mat r=(dist>0.1f);
+		Mat r(dist.size(),dist.type());
+		for(int i=0;i<dist.rows;i++){
+			for(int j=0;j<dist.cols;j++){
+				if(dist.at<float>(i,j)>0.1)
+					r.at<float>(i,j)=0;
+				else
+					r.at<float>(i,j)=1;
+			}
+		}
+		//printMat(r);
+		Mat v;
+		reduce(r,v,0,CV_REDUCE_SUM);
+		printMat(v);
+		cout <<endl;
+		double minv,maxv;
+		int minIdx[2],maxIdx[2];
+		minMaxIdx(v,&minv,&maxv,minIdx,maxIdx);
+		cout << minv<<","<<maxv<<endl;
+		cout <<minIdx[0]<<","<<minIdx[1]<<endl;
+		cout <<maxIdx[0]<<","<<maxIdx[1]<<endl;
+		cout <<v.at<float>(maxIdx[0],maxIdx[1])<<endl;
+		return r;
+	}
+	void updateClique(Mat potentialNodes,vector<int> &clique,Mat M){
+		int maxNumMatches=0;
+		int curr_max=0;
+		for(int i=0;i<potentialNodes.rows;i++){
+			if(potentialNodes.at<float>(i,0)==1){
+				int numMatches=0;
+				for(int j=0;potentialNodes.rows;j++){
+					if(potentialNodes.at<float>(j,0)==1 & M.at<float>(i,j)==1)
+						numMatches+=1;
+				}
+				if(numMatches>=maxNumMatches){
+					curr_max=i;
+					maxNumMatches=numMatches;
+				}
+			}
+		}
+		if(maxNumMatches!=0){
+			clique.push_back(curr_max);
+		}
+	}
+	Mat findPotentialNodes(vector<int> &clique,Mat M){
+		Mat newSet=M.col(clique[0]);
+		if(clique.size()>1){
+			for(int i=1;i<clique.size();i++){
+				newSet = newSet * M.col(clique[i]);
+			}
+		}
+		//nodes in clique are not potentialNodes
+		for(int i=0;i<clique.size();i++){
+			newSet.at<float>(i,0)=0;
+		}
+		return newSet;
 	}
 	void projectionError(Mat &rvec,Mat &tl){
 		vector<Point2f> proj2DafterPnP;
@@ -614,10 +695,10 @@ public :
 	}
 	void current2Previous(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
 		// prev<=cur
-		curDisp.copyTo(prevDisp);
+		curDisp      .copyTo(prevDisp);
 		curPointCloud.copyTo(prevPointCloud);
-		curFrameL.copyTo(prevFrameL);		      curFrameR.copyTo(prevFrameR);
-		curFrameL_c.copyTo(prevFrameL_c);	      curFrameR_c.copyTo(prevFrameR_c);
+		curFrameL    .copyTo(prevFrameL);		      curFrameR.copyTo(prevFrameR);
+		curFrameL_c  .copyTo(prevFrameL_c);	        curFrameR_c.copyTo(prevFrameR_c);
 		prevKeypointsL = curKeypointsL;		      prevKeypointsR = curKeypointsR;
 		curDescriptorsL.copyTo(prevDescriptorsL); curDescriptorsR.copyTo(prevDescriptorsR);
 		prevPointsL = curPointsL;    		      prevPointsR = curPointsR;
@@ -703,8 +784,8 @@ public :
 
         //cv::transform(cur3DMat,prev3DMatAfter,cur3DMat);
 		//erase x and z rotations since car only rotate on y
-        rvec.at<float>(0.0)=0;
-        rvec.at<float>(2.0)=0;
+        //rvec.at<float>(0.0)=0;
+        //rvec.at<float>(2.0)=0;
 
         // Update global pose Rgl and tgl
         Rodrigues(rvec,Rll);
@@ -717,8 +798,8 @@ public :
 		//cout << "Rgl"<< Rgl << endl;
 		//update global transform
 		Mat tll64;
-		tll.at<float>(0,0)=0;
-		tll.at<float>(1,0)=0;
+		//tll.at<float>(0,0)=0;
+		//tll.at<float>(1,0)=0;
 		tll.convertTo(tll64,CV_64FC1);
 		Mat dt=Rgl*tll64;
 		//tgl = tgl + (Rgl*(scale*tll));
@@ -749,6 +830,7 @@ public :
 		opticalFlowPyrLKTrack();
 
 		selectGoodPoints();
+		keepDist();
 
 		Mat rr,tr;
 		buildRelativePose(rr,tr);
@@ -758,7 +840,7 @@ public :
 		refreshTrackingPoints();
 
 		//Visualisation 2D
-  		resize(cpImg, cpImg, Size(), 0.5,0.5);
+  		resize(cpImg, cpImg, Size(), 0.95,0.95);
         imshow("prevDisp",cpImg);
 
         //Visualization 3D
