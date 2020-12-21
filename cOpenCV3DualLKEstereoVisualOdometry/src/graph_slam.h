@@ -4,7 +4,6 @@
  *  Created on: 21 Dec 2020
  *      Author: Francisco Dominguez
  */
-
 #pragma once
 #include <vector>
 #include <opencv2/opencv.hpp>
@@ -24,6 +23,7 @@ class GraphSLAM{
 	Matrix Omega;
 	Matrix Xi;
 public:
+	GraphSLAM(int sd=2):subDim(sd){}
 	int getDim(){
 		int d=(N+L)*subDim;
 		return d;
@@ -38,15 +38,21 @@ public:
 			Omega(m+b,m+b)+= dataOmega;
 			Omega(n+b,m+b)+=-dataOmega;
 			Omega(m+b,n+b)+=-dataOmega;
-			Xi(n+b,0)+=-dataXi(b,0);
-			Xi(m+b,0)+= dataXi(b,0);
+			Xi(n+b,0)     +=-dataXi(b,0);
+			Xi(m+b,0)     += dataXi(b,0);
 		}
 	}
 	void allocPose(){
 
 	}
 	void allocMeasurement(){
-
+		int newDim=getDim()+subDim;
+		Matrix newColumns=Mat::zeros(getDim(),subDim,Omega.type());
+		hconcat(Omega,newColumns,Omega);
+		Matrix newRows=Mat::zeros(subDim,newdim,Omega.type());
+		Omega.push_back(newRows);
+		Matrix newRowsXi=Mat::zeros(subDim,1,Xi.type());
+		Xi.push_back(newRowsXi);
 	}
 	void setPose2PoseEdge(int ps,int pe,Matrix values,float noise=1){
 		if(ps>=N) throw runtime_error("Pose source must be a existing node");
@@ -57,7 +63,7 @@ public:
 	void setPose2MeasurementEdge(int ps,int pe,Matrix values,float noise=1){
 		if(ps>=N) throw runtime_error("Pose source must be an existing node");
 		if(pe==N) allocMeasurement();
-		if(pe> N) throw runtime_error("Meaurement end must exists or be L+1 in order to insert new node");
+		if(pe> N) throw runtime_error("Measurement end must exists or be L+1 in order to insert new node");
 		setSubmatrix(ps,N+pe,1.0/noise,values/noise);
 	}
 	Matrix solve(){
