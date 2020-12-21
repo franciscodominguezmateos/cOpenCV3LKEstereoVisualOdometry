@@ -21,135 +21,15 @@
 #include "rigid_transformation.h"
 #include "binned_detector.h"
 #include "opencv3_util.h"
+#include "graph.h"
+#include "stereo_camera.h"
 
 using namespace std;
 using namespace cv;
 
-class StereoCamera{
-public:
-	// Left = 1 and Right = 2
-	// Intrinsic matrix and distortion parameter for each camera
-	Mat KL,distL;
-	Mat KR,distR;
-	Mat R,T;
-	Mat E,F;
-	Mat R1,R2,P1,P2,Q;
-	//for a horizontal camera should be T.at<double>(0)
-	double baseLine;
-	Size imageSize;
-	// Common rectified intrinsic matrix
-	Mat K;
-	//Create transformation and rectify maps
-	Mat cam1map1, cam1map2;
-	Mat cam2map1, cam2map2;
-
-	StereoCamera(string s){
-		load(s);
-	}
-	StereoCamera(){
-		//default Kitty parameters
-		double f = (double)(7.188560000000e+02 + 7.188560000000e+02)/2;
-		Point2f pp=Point2f((float)6.071928000000e+02, (float)1.852157000000e+02);
-		double baseLine=3.861448000000e+02/f*16;//base = -P2_roi(1,4)/P2_roi(1,1)
-		setParams(f,pp,baseLine);
-	}
-	StereoCamera(double f,Point2f pp,double baseline){
-		setParams(f,pp,baseline);
-	}
-	StereoCamera(Mat KLp,Mat distLp,
-			     Mat KRp,Mat distRp,
-				 Mat Rp,Mat Tp,Mat Ep,Mat Fp){
-		setParams(KLp,distLp,KRp,distRp,Rp,Tp,Ep,Fp);
-	}
-	void save(string out_file){
-		  FileStorage fs(out_file, FileStorage::WRITE);
-		  if(!fs.isOpened())
-			  throw runtime_error("File not opened in StereoCamera::save "+out_file);
-		  fs << "KL" << KL;
-		  fs << "KR" << KR;
-		  fs << "DL" << distL;
-		  fs << "DR" << distR;
-		  fs << "R" << R;
-		  fs << "T" << T;
-		  fs << "E" << E;
-		  fs << "F" << F;
-	}
-	void load(string in_file){
-		  FileStorage fs(in_file, FileStorage::READ);
-		  if(!fs.isOpened())
-			  throw runtime_error("File not opened in StereoCamera::load "+in_file);
-		  fs["KL"]>>KL;
-		  fs["DL"]>>distL;
-		  fs["KR"]>>KR;
-		  fs["DR"]>>distR;
-		  fs["R"] >>R;
-		  fs["T"] >>T;
-		  fs["E"] >>E;
-		  fs["F"] >>F;
-		  setParams(KL,distL,KR,distR,R,T,E,F);
-	}
-	void setParams(double f,Point2f pp,double baseline){
-	    baseLine=baseline;
-        //Intrinsic kitti values 00
-	    double cx=pp.x;
-	    double cy=pp.y;
-	    double Tx=baseLine;
-	    //Intrinsic Matrix
-		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
-				                   0.00,  f   , cy,
-								   0.00,  0.00, 1.00);
-		//reprojection Matrix
-		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
-				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
-								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
-								   0.00,  0.00, 1./Tx,  0);
-	}
-	void setParams(Mat KLp,Mat distLp,
-		     	   Mat KRp,Mat distRp,
-			       Mat Rp,Mat Tp,Mat Ep,Mat Fp){
-	KL=KLp; distL=distLp;
-	KR=KRp; distR=distRp;
-	R=Rp; T=Tp;
-	E=Ep, F=Fp;
-	// but could be P1.at<double>(0,3)??
-	baseLine=Tp.at<double>(0,0);
-	int rectivy_scale=0; // 0=full_crop, 1=no_crop
-	stereoRectify(KL, distL, KR, distR, imageSize, R, T, R1, R2, P1, P2, Q,CALIB_ZERO_DISPARITY,rectivy_scale);
-	K=(Mat_<double>(3, 3) <<
-		P1.at<double>(0,0),P1.at<double>(0,1),P1.at<double>(0,2),
-		P1.at<double>(1,0),P1.at<double>(1,1),P1.at<double>(1,2),
-		P1.at<double>(2,0),P1.at<double>(2,2),P1.at<double>(2,2));
-    // Compute undistortion and rectification mapping
-	initUndistortRectifyMap(KL, distL, R1, P1, imageSize , CV_16SC2, cam1map1, cam1map2);
-	initUndistortRectifyMap(KR, distR, R2, P2, imageSize , CV_16SC2, cam2map1, cam2map2);
-	}
-	Mat rectifyLeft(Mat imgL){
-		Mat leftStereoUndistorted; //Create matrices for storing rectified images
-		//Rectify and undistort images
-		remap(imgL, leftStereoUndistorted, cam1map1, cam1map2, INTER_LINEAR);
-		return leftStereoUndistorted;
-	}
-	Mat rectifyRight(Mat imgR){
-		Mat rightStereoUndistorted; //Create matrices for storing rectified images
-		//Rectify and undistort images
-		remap(imgR, rightStereoUndistorted, cam2map1, cam2map2, INTER_LINEAR);
-		return rightStereoUndistorted;
-	}
-	Mat getLeftFromStereo(Mat imgS){
-		int w=imgS.cols>>1;
-		Rect r(0,0,w,imgS.rows);
-		Mat imgL(imgS(r));
-		return imgL;
-	}
-	Mat getRightFromStereo(Mat imgS){
-		int w=imgS.cols>>1;
-		Rect r(w,0,w,imgS.rows);
-		Mat imgR(imgS(r));
-		return imgR;
-	}
-};
 class DualLKEstereoVisualOdometry {
 public :
+	StereoCamera sc;
 	Mat curFrameL,curFrameL_c, prevFrameL,prevFrameL_c, curFrameL_kp, prevFrameL_kp;
 	Mat curFrameR,curFrameR_c, prevFrameR,prevFrameR_c, curFrameR_kp, prevFrameR_kp;
 	vector<KeyPoint> curKeypointsL, prevKeypointsL, curGoodKeypointsL, prevGoodKeypointsL;
@@ -170,34 +50,27 @@ public :
 	Ptr<flann::IndexParams> indexParams;
 	Ptr<flann::SearchParams> searchParams;
 	Ptr<DescriptorMatcher> matcher;
-	// relative scale
-	double scale;
-	// Rectify CAMERA PARAMS
-	// after rectifying both cameras have same parameters
-	//double f = (double)(8.941981e+02 + 8.927151e+02)/2;
-	//Point2f pp((float)6.601406e+02, (float)2.611004e+02);
-	double f ; // focal length in pixels as in K intrinsic matrix
-	Point2f pp; //principal point in pixel
-	Mat K; //intrinsic matrix
+
 	//global rotation and translation
-	Mat Rgl, tgl,Rglprev,tglprev;
-	Mat Rgr, tgr,Rgrprev,tgrprev;
-	Mat Rg, tg,Rgprev,tgprev;
+	Mat Rgl, tgl, Rglprev,tglprev;
+	Mat Rgr, tgr, Rgrprev,tgrprev;
+	Mat Rg,  tg , Rgprev ,tgprev;
 	//local rotation and transalation from prev to cur
 	Mat Rll, tll;
 	Mat Rlr, tlr;
 	Mat Rl, tr;
+
 	//STEREO DATA
 	Mat curDisp,prevDisp;
 	Mat curPointCloud,prevPointCloud;
 	//Stereo Matches
 	Ptr<StereoMatcher> sm;
 	//Reprojection Matrix from 2D (u,v) and disp to 3D (X,Y,Z)
-	Mat Q;
-	double baseLine;
+	//Mat Q;
+	//double baseLine;
 	//temp attributes
 	vector<vector<DMatch> > matches;
-	Mat E,mask;
+	//Mat E,mask;
 	vector<Point3f> prev3Dpts,cur3Dpts;
 	//Historic data
 	vector< vector<Point2f> > pts2D;
@@ -207,67 +80,8 @@ public :
 	Mat cpImg;
     viz::Viz3d myWindow;
 //public:
-	DualLKEstereoVisualOdometry():bd(3,10,10),myWindow("Coordinate Frame"){
-        // relative scale
-        scale = 1.0;
-        //f = (double)(8.941981e+02 + 8.927151e+02)/2;
-		//pp((float)6.601406e+02, (float)2.611004e+02);
-        //Intrinsic kitti values 00
-		f = (double)(7.188560000000e+02 + 7.188560000000e+02)/2;
-		pp=Point2f((float)6.071928000000e+02, (float)1.852157000000e+02);
-		baseLine=3.861448000000e+02/f*16;//base = -P2_roi(1,4)/P2_roi(1,1)
-	    double cx=pp.x;
-	    double cy=pp.y;
-	    double Tx=baseLine;
-	    //Intrinsic Matrix
-		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
-				                   0.00,  f   , cy,
-								   0.00,  0.00, 1.00);
-		//reprojection Matrix
-		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
-				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
-								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
-								   0.00,  0.00, 1./Tx,  0);
-	}
-	DualLKEstereoVisualOdometry(double f,Point2f pp,double baseLine):f(f),pp(pp),baseLine(baseLine),bd(3,10,10),myWindow("Coordinate Frame"){
-        // relative scale
-        scale = 1.0;
-	    double cx=pp.x;
-	    double cy=pp.y;
-	    double Tx=baseLine;
-	    //Intrinsic Matrix
-		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
-				                   0.00,  f   , cy,
-								   0.00,  0.00, 1.00);
-		//reprojection Matrix
-		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
-				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
-								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
-								   0.00,  0.00, 1./Tx,  0);
-	}
-/*	DualLKEstereoVisualOdometry(Mat &pcurFrameL_c,Mat &pcurFrameR_c):bd(3,10,10),myWindow("Coordinate Frame"){
-        // relative scale
-        scale = 1.0;
-        //f = (double)(8.941981e+02 + 8.927151e+02)/2;
-		//pp((float)6.601406e+02, (float)2.611004e+02);
-        //Intrinsic kitti values 00
-		f = (double)(7.188560000000e+02 + 7.188560000000e+02)/2;
-		pp=Point2f((float)6.071928000000e+02, (float)1.852157000000e+02);
-		baseLine=3.861448000000e+02/f*16;//base = -P2_roi(1,4)/P2_roi(1,1)
-	    double cx=pp.x;
-	    double cy=pp.y;
-	    double Tx=baseLine;
-	    //Intrinsic Matrix
-		K = (Mat_<double>(3, 3) << f   ,  0.00, cx,
-				                   0.00,  f   , cy,
-								   0.00,  0.00, 1.00);
-		//reprojection Matrix
-		Q = (Mat_<double>(4, 4) << 1.00,  0.00, 0.00, -cx,
-				                   0.00,  1.00, 0.00, -cy,  // turn points 180 deg around x-axis,
-								   0.00,  0.00, 0.00,  f,     // so that y-axis looks up
-								   0.00,  0.00, 1./Tx,  0);
-		init(pcurFrameL_c,pcurFrameR_c);
-	}*/
+	DualLKEstereoVisualOdometry():bd(3,10,10),myWindow("Coordinate Frame"){	}
+	DualLKEstereoVisualOdometry(double f,Point2f pp,double baseLine):sc(f,pp,baseLine),bd(3,10,10),myWindow("Coordinate Frame"){}
 	void init(Mat &pcurFrameL_c,Mat &pcurFrameR_c){
 			cout << pcurFrameL_c.rows << ","<<pcurFrameL_c.cols<<endl;
 			pcurFrameL_c.copyTo(curFrameL_c);
@@ -291,32 +105,26 @@ public :
 			//extractor->compute(curFrameL, curKeypointsL, curDescriptorsL);
 			//extractor->compute(curFrameR, curKeypointsR, curDescriptorsR);
 			//Global transformations
-			Rg  = (Mat_<double>(3, 3) << 1., 0., 0.,
+			Mat I  = (Mat_<double>(3, 3) << 1., 0., 0.,
 					                     0., 1., 0.,
 										 0., 0., 1.);
-			tg  = (Mat_<double>(3, 1) << 0., 0., 0.);
-			Rgl = (Mat_<double>(3, 3) << 1., 0., 0.,
-					                     0., 1., 0.,
-										 0., 0., 1.);
-			tgl = (Mat_<double>(3, 1) << 0., 0., 0.);
-			Rgr = (Mat_<double>(3, 3) << 1., 0., 0.,
-					                     0., 1., 0.,
-										 0., 0., 1.);
-			tgr = (Mat_<double>(3, 1) << 0., 0., 0.);
+			Mat t0  = (Mat_<double>(3, 1) << 0., 0., 0.);
+			Rg  = I;
+			tg  = t0;
+			Rgl = I;
+			tgl = t0;
+			Rgr = I;
+			tgr = t0;
 			//Local transformations
-			Rll = (Mat_<double>(3, 3) << 1., 0., 0.,
-					                     0., 1., 0.,
-										 0., 0., 1.);
-			tll = (Mat_<double>(3, 1) << 0., 0., 0.);
-			Rlr = (Mat_<double>(3, 3) << 1., 0., 0.,
-					                     0., 1., 0.,
-										 0., 0., 1.);
-			tlr = (Mat_<double>(3, 1) << 0., 0., 0.);
+			Rll = I;
+			tll = t0;
+			Rlr = I;
+			tlr = t0;
 
 			// Stereo 3D data extraction
-			sm=StereoBM::create(16*6,5);//9);
+			sm=StereoBM::create(16*8,5);//9);
 			sm->compute(curFrameL,curFrameR,curDisp);
-	        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+	        reprojectImageTo3D(curDisp, curPointCloud, sc.Q, true);
 	        //bilateralFilterPointCloud(curPointCloud);
 			//Mix disparity and current left frame
 	        Mat cdisp8;
@@ -341,17 +149,7 @@ public :
 	// function performs ratiotest
 	// to determine the best keypoint matches
 	// between consecutive poses
-	void ratioTest(vector<vector<DMatch> > &matches, vector<DMatch> &good_matches) {/*
-		for (vector<vector<DMatch> >::iterator it = matches.begin(); it!=matches.end(); it++) {
-			if (it->size()>1 ) {
-				if ((*it)[0].distance/(*it)[1].distance > 0.6f) {
-					it->clear();
-				}
-			} else {
-				it->clear();
-			}
-			if (!it->empty()) good_matches.push_back((*it)[0]);
-		}*/
+	void ratioTest(vector<vector<DMatch> > &matches, vector<DMatch> &good_matches) {
 		for(vector<DMatch> &vdm:matches){
 			if(vdm.size()>1){
 				if(vdm[0].distance/vdm[1].distance>0.6) vdm.clear();
@@ -385,10 +183,10 @@ public :
             good_keypoints_2.push_back(keypoints_2[i2]);
 		}
 	}
-	inline void getPoseFromEssentialMat(vector<Point2f> &point1, vector<Point2f> &point2,Mat &R,Mat &t){
+	/*inline void getPoseFromEssentialMat(vector<Point2f> &point1, vector<Point2f> &point2,Mat &R,Mat &t){
 		E = findEssentialMat(point2, point1, f, pp, RANSAC, 0.999, 1.0,mask);
 		recoverPose(E, point2, point1, R, t, f, pp,mask);
-	}
+	}*/
 	void getUVdispFromKeyPoints(vector<KeyPoint> &kpts,Mat &disp,Mat &uvd){
 		vector<Point3f> vp;
 		Point3f p;
@@ -433,79 +231,64 @@ public :
         //cornerSubPix(prevFrameL, prevPointsL, subPixWinSize, Size(-1,-1), termcrit);
         //cornerSubPix( curFrameL,  curPointsL, subPixWinSize, Size(-1,-1), termcrit);
 	}
-	void selectGoodPoints(){
-		int cbad=0,nbad=0,dbad=0;
+	//
+	void selectPointsFromIndices(vector<int> indices,Scalar color=Scalar(0,255,0),int thick=2){
+		//Clean points
+		vector<Point3f> cur3DptsClean,prev3DptsClean;
+		vector<Point2f> cur2DptsClean,prev2DptsClean;
+		for(int &i:indices){
+			 cur3DptsClean.push_back( cur3Dpts[i]);
+			prev3DptsClean.push_back(prev3Dpts[i]);
+			 cur2DptsClean.push_back( cur2Dpts[i]);
+			prev2DptsClean.push_back(prev2Dpts[i]);
+    		Point2f ppx(prev2Dpts[i].x,prev2Dpts[i].y+cpImg.rows/2);//pixel of prev in cpImg
+			line(cpImg,ppx,cur2Dpts[i],color,thick);
+		}
+ 		 cur3Dpts= cur3DptsClean;
+ 		prev3Dpts=prev3DptsClean;
+ 		 cur2Dpts= cur2DptsClean;
+ 		prev2Dpts=prev2DptsClean;
+	}
+	void buildGoodPoints(){
         prev3Dpts.clear();
-        cur3Dpts.clear();
+         cur3Dpts.clear();
         prev2Dpts.clear();
-        cur2Dpts.clear();
-        Point3f p3d,c3d;
+         cur2Dpts.clear();
+		int cbad=0,nbad=0,dbad=0;
         for(unsigned int i=0;i<prevPointsL.size();i++){
     		Point2f p2df1=prevPointsL[i];
     		Point2f c2df1= curPointsL[i];
-    		Point2f ppx(p2df1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
-    		//cout << "i"<< i <<endl;
-    		//cout << "p2df1="<< p2df1 <<endl;
-    		//cout << "c2df1="<< c2df1 <<endl;
 
-    		//theses two points should be the same or be very close to each other
-        	p3d=prevPointCloud.at<Point3f>(p2df1);
-        	c3d= curPointCloud.at<Point3f>(c2df1);
-    		//cout << "p3d="<< p3d <<endl;
-    		//cout << "c3d="<< c3d <<endl;
+    		//theses two points should be very close to each other
+        	Point3f p3d=prevPointCloud.at<Point3f>(p2df1);
+        	Point3f c3d= curPointCloud.at<Point3f>(c2df1);
         	float pz=p3d.z;
         	float cz=c3d.z;
         	//not disparity points have a z value of 1000
         	if(pz<10000 && cz<10000){
-				Point3f dif3D=p3d-c3d;
-				float d=sqrt(dif3D.dot(dif3D));
+				float d=distPoint3f(p3d,c3d);
 				//d should be velocity/time
 				if (d<500e3/36000){
-					//cout << "dif3D="<<dif3D<<":"<<d<<endl;
-					int disp=prevDisp.at<unsigned short>(p2df1)>>4;//16-bit fixed-point disparity map (where each disparity value has 4 fractional bits)
-					Point2f p2f2=prevPointsL[i];
-					p2f2.x-=disp;
-					p2f2.y+=cpImg.rows/2;
-					line(cpImg,ppx,p2f2,Scalar(0, 255, 0));
-					if(pz<30 && pz>0.0){
-						putText(cpImg,toString(pz)+":"+toString(d),ppx  ,1,1,Scalar(0, 255, 255));
-						putText(cpImg,toString(cz)                ,c2df1,1,1,Scalar(255, 255, 0));
+					if(pz<50 && pz>0.0){
 						prev3Dpts.push_back(p3d);
 						 cur3Dpts.push_back(c3d);
 						prev2Dpts.push_back(p2df1);
 						 cur2Dpts.push_back(c2df1);
-						circle(cpImg,ppx ,8,Scalar(255, 0, 0));
-						circle(cpImg,c2df1,8,Scalar(255, 0, 0));
-						line(cpImg,ppx,c2df1,Scalar(255,255,255));
 					}
-					else{
-						putText(cpImg,toString(cz),c2df1,1,1,Scalar(0, 64, 255));
-						//circle(cpImg,ppx,3,Scalar(0, 128, 255));
-						line(cpImg,ppx,c2df1,Scalar(0,   0, 255));
-						nbad++;
-					}
+					else nbad++;
 				}
-				else{
-					//putText(cpImg,to_string(pz),ppx,1,1,Scalar(0, 0, 255));
-					//circle(cpImg,ppx,3,Scalar(0, 0, 255));
-					cbad++;
-				}
+				else cbad++;
         	}
-        	else{
-				circle(cpImg,ppx,3,Scalar(0, 0, 255));
-        		dbad++;
-        	}
+        	else dbad++;
         }
         cout <<"#prevPointsL   ="<<prevPointsL.size() << endl;
         cout <<"#cbad distance ="<<cbad<<endl;
         cout <<"#nbad too far  ="<<nbad<<endl;
         cout <<"#dbad disparity="<<dbad<<endl;
         cout <<"#PointsL left  ="<<prevPointsL.size()-cbad-nbad-dbad<<endl;
-        cout <<"prev3Dpts="<< prev3Dpts.size() << endl;
-        cout <<"cur2DforPnP="<< cur2Dpts.size() << endl;
 	}
 	Mat allDistances(vector<Point3f> &pts3D){
-		int L=fmin(10,pts3D.size());
+		int L=fmin(1000,pts3D.size());
 		Mat r=Mat::zeros(L,L,CV_32F);
 		for(int i=0;i<L;i++){
 			for(int j=0;j<L;j++){
@@ -515,88 +298,69 @@ public :
 		}
 		return r;
 	}
-	Mat keepDist(){
+	void rigidBodyConstraint(){
 		Mat prevDist=allDistances(prev3Dpts);
 		Mat currDist=allDistances(cur3Dpts);
 		Mat dist;
 		absdiff(prevDist,currDist,dist);
-		//printMat(dist);
 		//this doesn't work!!!
 		//Mat r=(dist>0.1f);
 		Mat r(dist.size(),dist.type());
 		for(int i=0;i<dist.rows;i++){
 			for(int j=0;j<dist.cols;j++){
-				if(dist.at<float>(i,j)>0.1)
+				if(dist.at<float>(i,j)>0.20)
 					r.at<float>(i,j)=0;
 				else
 					r.at<float>(i,j)=1;
 			}
 		}
 		//printMat(r);
-		Mat v;
-		reduce(r,v,0,CV_REDUCE_SUM);
-		printMat(v);
-		cout <<endl;
-		double minv,maxv;
-		int minIdx[2],maxIdx[2];
-		minMaxIdx(v,&minv,&maxv,minIdx,maxIdx);
-		cout << minv<<","<<maxv<<endl;
-		cout <<minIdx[0]<<","<<minIdx[1]<<endl;
-		cout <<maxIdx[0]<<","<<maxIdx[1]<<endl;
-		cout <<v.at<float>(maxIdx[0],maxIdx[1])<<endl;
-		return r;
+		Graph<float> g(r);
+		vector<int> mClique=g.maxClique();
+		cout << "maxClique="<<mClique.size()<<endl;
+		if(mClique.size()<10) return;
+		selectPointsFromIndices(mClique);
 	}
-	void updateClique(Mat potentialNodes,vector<int> &clique,Mat M){
-		int maxNumMatches=0;
-		int curr_max=0;
-		for(int i=0;i<potentialNodes.rows;i++){
-			if(potentialNodes.at<float>(i,0)==1){
-				int numMatches=0;
-				for(int j=0;potentialNodes.rows;j++){
-					if(potentialNodes.at<float>(j,0)==1 & M.at<float>(i,j)==1)
-						numMatches+=1;
-				}
-				if(numMatches>=maxNumMatches){
-					curr_max=i;
-					maxNumMatches=numMatches;
-				}
-			}
+	float msr2D(vector<Point2f> &vp0,vector<Point2f> &vp1){
+		if(vp0.size()!=vp1.size())
+			throw runtime_error("Both vectors have to have same size in msr2D");
+		float tdp=0;
+		for(unsigned int i=0;i<vp0.size();i++){
+			float dp=distPoint2f(vp0[i],vp1[i]);
+			tdp+=dp;
 		}
-		if(maxNumMatches!=0){
-			clique.push_back(curr_max);
-		}
+		float msr=tdp/vp0.size();
+		return msr;
 	}
-	Mat findPotentialNodes(vector<int> &clique,Mat M){
-		Mat newSet=M.col(clique[0]);
-		if(clique.size()>1){
-			for(int i=1;i<clique.size();i++){
-				newSet = newSet * M.col(clique[i]);
-			}
+	vector<int> msr2Didx(vector<Point2f> &vp0,vector<Point2f> &vp1,float threshold=1.0){
+		if(vp0.size()!=vp1.size())
+			throw runtime_error("Both vectors have to have same size in msr2Didx");
+		vector<int> vi;
+		for(unsigned int i=0;i<vp0.size();i++){
+			float dp=distPoint2f(vp0[i],vp1[i]);
+			if(dp>threshold) vi.push_back(i);
 		}
-		//nodes in clique are not potentialNodes
-		for(int i=0;i<clique.size();i++){
-			newSet.at<float>(i,0)=0;
-		}
-		return newSet;
+		return vi;
 	}
-	void projectionError(Mat &rvec,Mat &tl){
-		vector<Point2f> proj2DafterPnP;
-		cv::projectPoints(cur3Dpts,rvec,tll,K,Mat(),proj2DafterPnP);
+	void projectionError(Mat &rvec,Mat &tll){
+		vector<Point2f> prev2Dproj;
+		projectPoints(cur3Dpts,rvec,tll,sc.K,Mat(),prev2Dproj);
+		vector<int> indices=msr2Didx(prev2Dpts,prev2Dproj);
 		//cv::transform(cur3Dpts,prevAfterFitting,Rll);
 		float tdp=0;
 		vector<Point3f> cur3DptsClean,prev3DptsClean;
 		vector<Point2f> cur2DptsClean,prev2DptsClean;
 		Point2f dif2D;
 		//Point3f dif3D;
-		for(unsigned int i=0;i<proj2DafterPnP.size();i++){
+		for(unsigned int i=0;i<prev2Dproj.size();i++){
 			//Visualization variables
-    		Point2f p2daf1=proj2DafterPnP[i];
-    		Point2f p2df1=prev2Dpts[i];
+    		Point2f p2daf1=prev2Dproj[i];
+    		Point2f p2df1 =prev2Dpts[i];
     		Point2f ppxa(p2daf1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
     		Point2f ppx(p2df1.x,p2df1.y+cpImg.rows/2);//pixel of prev in cpImg
     		//work out varibles
         	//dif3D=prev3Dpts[i]-prevAfterFitting[i];
-        	float dp=distPoint2f(prev2Dpts[i],proj2DafterPnP[i]);
+        	float dp=distPoint2f(prev2Dpts[i],prev2Dproj[i]);
         	//float dp3D=sqrt(dif3D.dot(dif3D));
         	tdp+=dp;
         	if(dp>1.0){
@@ -612,36 +376,29 @@ public :
         	}
 		}
 
- 		cur3Dpts= cur3DptsClean;
+ 		 cur3Dpts= cur3DptsClean;
  		prev3Dpts= prev3DptsClean;
  		curPointsL=cur2DptsClean;
  		prevPointsL=prev2DptsClean;
 
 		//reprojection mean error
-		tdp/=proj2DafterPnP.size();
+		tdp/=prev2Dproj.size();
 		cout << "tdp0="<< tdp << endl;
+
 		if(cur3DptsClean.size()>0){
 			Mat cur3DMat1=Mat( cur3DptsClean).reshape(1);
 			//cout << " cur3DMat1=" << cur3DptsClean.size()<< endl;
 			Mat prev3DMat1=Mat(prev3DptsClean).reshape(1);
 			//cout << "prev3DMat1=" << prev3DptsClean.size() <<endl;
 			rigidTransformation(cur3DMat1,prev3DMat1,Rll,tll);
-			//cout << "rigidTransformation=" << endl;
 			Rodrigues(Rll,rvec);
-			proj2DafterPnP.clear();
-			cv::projectPoints(cur3DptsClean,rvec,tll,K,Mat(),proj2DafterPnP);
+	        //Mat inliers;
+	        //cv::solvePnPRansac(cur3DptsClean,prev3DptsClean,sc.K,noArray(),rvec,tll,true,100,1.0,0.99,inliers);
+			//cout << "rigidTransformation=" << endl;
+			prev2Dproj.clear();
+			cv::projectPoints(cur3DptsClean,rvec,tll,sc.K,Mat(),prev2Dproj);
 			//cout << "projectPoints=" << endl;
-			tdp=0;
-			for(unsigned int i=0;i<proj2DafterPnP.size();i++){
-				dif2D=prev2DptsClean[i]-proj2DafterPnP[i];
-				float dp=sqrt(dif2D.dot(dif2D));
-				tdp+=dp;
-				//if(dp>2.0){
-				//	cout <<prev2Dpts[i]<<":"<<dp<<"~" <<proj2DafterPnP[i] << endl;
-				//}
-			}
-			//reprojection mean error
-			tdp/=proj2DafterPnP.size();
+			tdp=msr2D(prev2DptsClean,prev2Dproj);
 			cout << "tdp1="<< tdp << endl;
 		}
 
@@ -672,7 +429,7 @@ public :
         string s0("CPW");
         string s1("CPW_FRUSTUM");
         viz::WCameraPosition *cpw=new viz::WCameraPosition(0.05); // Coordinate axes
-        viz::WCameraPosition *cpw_frustum=new viz::WCameraPosition(Matx33d(K),curFrameL_c,0.91); // Camera frustum
+        viz::WCameraPosition *cpw_frustum=new viz::WCameraPosition(Matx33d(sc.K),curFrameL_c,0.91); // Camera frustum
         //myWindow.showWidget(s0+widgetName,*cpw,*camPose);
         //myWindow.showWidget(s1+widgetName,*cpw_frustum,*camPose);
         myWindow.setViewerPose(*camPose);
@@ -719,7 +476,12 @@ public :
         //cv::solvePnP(cur3Dpts,prev2Dpts,K,noArray(),r,t,0,SOLVEPNP_ITERATIVE);
 
         Mat inliers;
-        cv::solvePnPRansac(cur3Dpts,prev2Dpts,K,noArray(),rr,tr,false,100,1.5,0.99,inliers);
+        cv::solvePnPRansac(cur3Dpts,prev2Dpts,sc.K,noArray(),rr,tr,false,100,1.5,0.99,inliers);
+        vector<int> indices;
+        for(int i=0;i<inliers.rows;i++)
+        	indices.push_back(inliers.at<int>(i,0));
+        selectPointsFromIndices(indices);
+        /*
         vector<Point3f> prev3DptsIn,cur3DptsIn;
         vector<Point2f> prev2DptsIn, cur2DptsIn;
         for(int i=0;i<inliers.rows;i++){
@@ -733,8 +495,12 @@ public :
         prev3Dpts=prev3DptsIn;
          cur2Dpts=cur2DptsIn;
         prev2Dpts=prev2DptsIn;
-        cv::solvePnPRansac(cur3Dpts,prev2Dpts,K,noArray(),rr,tr,true,100,1.0,0.99,inliers);
-        prev3DptsIn.clear();
+        */
+        cv::solvePnPRansac(cur3Dpts,prev2Dpts,sc.K,noArray(),rr,tr,true,100,1.0,0.99,inliers);
+        for(int i=0;i<inliers.rows;i++)
+        	indices.push_back(inliers.at<int>(i,0));
+        selectPointsFromIndices(indices);
+        /*prev3DptsIn.clear();
          cur3DptsIn.clear();
         prev2DptsIn.clear();
          cur2DptsIn.clear();
@@ -748,12 +514,12 @@ public :
          cur3Dpts=cur3DptsIn;
         prev3Dpts=prev3DptsIn;
          cur2Dpts=cur2DptsIn;
-        prev2Dpts=prev2DptsIn;
+        prev2Dpts=prev2DptsIn;*/
 	}
 	void buildPointCould(){
 		//Compute disparity and 3D point cloud
 		sm->compute(curFrameL, curFrameR, curDisp);
-        reprojectImageTo3D(curDisp, curPointCloud, Q, true);
+        reprojectImageTo3D(curDisp, curPointCloud, sc.Q, true);
         //bilateralFilterPointCloud(curPointCloud);
 
         // TO VISUALISE DISP
@@ -812,7 +578,7 @@ public :
 	void refreshTrackingPoints(){
 		//refresh tracking points
 		cout << "#curPoints=" <<  curPointsL.size()<<endl;
-		if(curPointsL.size()<1950){//match point if there are few points
+		if(curPointsL.size()<90){//match point if there are few points
 			//Keypoints detection
 			curKeypointsL.clear();
 			bd.refreshDetection(curFrameL, curPointsL, curKeypointsL);
@@ -829,8 +595,9 @@ public :
 
 		opticalFlowPyrLKTrack();
 
-		selectGoodPoints();
-		keepDist();
+		buildGoodPoints();
+
+		rigidBodyConstraint();
 
 		Mat rr,tr;
 		buildRelativePose(rr,tr);
