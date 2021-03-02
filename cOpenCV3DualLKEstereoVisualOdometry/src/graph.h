@@ -3,10 +3,9 @@
  *
  *  Created on: 19 Dec 2020
  *      Author: Francisco Dominguez
- *  This graph if a help to detect inlier with maximoum cliques
+ *  This graph if a help to detect inlier with maximum cliques
  *  of connected keypoints
  */
-
 #pragma once
 //this default value doesn't seem to work
 template<typename T=float>

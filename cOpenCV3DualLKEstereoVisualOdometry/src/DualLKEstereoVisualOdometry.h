@@ -496,10 +496,12 @@ public :
          cur2Dpts=cur2DptsIn;
         prev2Dpts=prev2DptsIn;
         */
+        /* This second computation doesn't seem to work
         cv::solvePnPRansac(cur3Dpts,prev2Dpts,sc.K,noArray(),rr,tr,true,100,1.0,0.99,inliers);
         for(int i=0;i<inliers.rows;i++)
         	indices.push_back(inliers.at<int>(i,0));
         selectPointsFromIndices(indices);
+        */
         /*prev3DptsIn.clear();
          cur3DptsIn.clear();
         prev2DptsIn.clear();
@@ -586,7 +588,7 @@ public :
 			KeyPoint::convert(curKeypointsL, rPoints);
 			curPointsL.insert(curPointsL.end(), rPoints.begin(), rPoints.end());
 		}
-		cout << "#curPoints" <<  curPointsL.size()<<endl;
+		cout << "#curPoints=" <<  curPointsL.size()<<endl;
 	}
 	void stepStereoOdometry(Mat& pcurFrameL_c,Mat& pcurFrameR_c){
 		current2Previous(pcurFrameL_c,pcurFrameR_c);
